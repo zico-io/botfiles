@@ -25,12 +25,13 @@ import sys
 # ponytail: ready strings and flags are version-sensitive — tune here if a
 # harness changes its startup banner or the `--model` flag.
 HARNESSES = {
-    "claude": {"cmd": "claude --dangerously-skip-permissions --model {model}", "ready": "for shortcuts"},
-    "codex":  {"cmd": "codex --dangerously-bypass-approvals-and-sandbox --model {model}", "ready": "Codex"},
-    "pi":     {"cmd": "pi --name {role} --model {model}", "ready": "pi"},
+    "claude": {"cmd": "claude --dangerously-skip-permissions --model {model}", "ready": "bypass permissions on", "working": "esc to interrupt"},
+    "codex":  {"cmd": "codex --dangerously-bypass-approvals-and-sandbox --model {model}", "ready": "Codex", "working": "esc to interrupt"},
+    "pi":     {"cmd": "pi --name {role} --model {model}", "ready": "pi", "working": "esc to interrupt"},
 }
 
 READY_TIMEOUT_MS = "60000"
+SUBMIT_TIMEOUT_MS = "15000"  # how long to wait for an injected prompt to start running
 
 
 def herdr(*args):
@@ -105,6 +106,15 @@ def launch(pane, role, harness, model, feature, parent):
     herdr("pane", "run", pane, spec["cmd"].format(model=model, role=role))
     herdr("wait", "output", pane, "--match", spec["ready"], "--timeout", READY_TIMEOUT_MS)
     herdr("pane", "run", pane, bootstrap(role, harness, feature, parent))
+    # A freshly-split pane can swallow the submit newline before its TUI is ready,
+    # leaving the prompt typed but unsent. Confirm the agent started; if not, press
+    # Enter and re-check. An extra Enter on an already-submitted (empty) prompt is a
+    # harmless no-op, so this is safe to run for every agent.
+    try:
+        herdr("wait", "output", pane, "--match", spec["working"], "--timeout", SUBMIT_TIMEOUT_MS)
+    except subprocess.CalledProcessError:
+        herdr("pane", "send-keys", pane, "Enter")
+        herdr("wait", "output", pane, "--match", spec["working"], "--timeout", SUBMIT_TIMEOUT_MS)
 
 
 def up(roster_path):
