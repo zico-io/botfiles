@@ -1,0 +1,15 @@
+botfile: 1.0
+identity:
+  agent: bask-product-agent        # placeholder — rename
+  canonical_instructions: ../AGENTS.md
+scopes: [org, project, user, session]   # precedence low -> high
+persistence:
+  mode: continuous            # append distilled facts, never raw logs
+  ingest: distilled_only
+  conflict_policy: upsert     # UPDATE/DELETE allowed (avoids ADD-only drift)
+entities:
+  store: entities.jsonl
+retention:
+  provenance: required        # every fact carries source + date
+  ttl_days: null              # explicit, not implicit
+# retrieval + entity-resolution config deferred until a backend consumes it

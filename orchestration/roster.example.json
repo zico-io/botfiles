@@ -1,0 +1,10 @@
+{
+  "feature": "checkout-redesign",
+  "repo": "/Users/percules/dev/app",
+  "roles": [
+    {"role": "lead-be",     "parent": "orchestrator", "harness": "claude", "model": "opus"},
+    {"role": "lead-fe",     "parent": "orchestrator", "harness": "codex",  "model": "gpt-5.5"},
+    {"role": "worker-be-1", "parent": "lead-be",      "harness": "pi",     "model": "google/gemini-2.5-pro"},
+    {"role": "worker-fe-1", "parent": "lead-fe",      "harness": "claude", "model": "sonnet"}
+  ]
+}

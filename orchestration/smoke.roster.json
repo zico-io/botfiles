@@ -1,0 +1,8 @@
+{
+  "feature": "smoke",
+  "repo": "/Users/percules/.botfiles",
+  "roles": [
+    {"role": "lead-a",     "parent": "orchestrator", "harness": "claude", "model": "sonnet"},
+    {"role": "worker-a-1", "parent": "lead-a",       "harness": "claude", "model": "sonnet"}
+  ]
+}
