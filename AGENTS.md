@@ -27,9 +27,9 @@ Every fact ends with inline provenance:
 
 ## Orchestration protocol
 
-Multi-agent work runs on **herdr** (placement/process/status) + the
-**agent-comms** tool (coordination). Max **three layers**, enforced by room
-membership:
+Multi-agent work runs on **herdr** (placement/process/status) + the **`comms`
+CLI** talking to a per-mission **comms server** on the host (coordination). Max
+**three layers**, enforced by room membership:
 
 - **L1 orchestrator** — the pane you are in. Talks to leads in `mission-<feature>`.
 - **L2 leads** — one herdr tab each; in `mission-<feature>` and own `squad-<lead>`.
@@ -38,8 +38,9 @@ membership:
 
 Rooms are public, joined by name. The orchestrator never messages a worker
 directly. Stand up / tear down a fleet from a roster with
-`orchestration/spawn.py` (`up`/`down`) or the `/spawn-team` command; harnesses
-are claude/codex/pi. See `.botfile/memory/tools/orchestration.md`.
+`orchestration/spawn.py` (`up`/`down`) or the `/spawn-team` command; `up` starts
+the mission's comms server and `down` kills it (rooms die with it). Harnesses are
+claude/codex/pi. See `.botfile/memory/tools/orchestration.md`.
 
 ## Entity discipline
 

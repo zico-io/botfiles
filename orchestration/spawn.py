@@ -3,11 +3,12 @@
 
 Reads a roster JSON, spawns leads (layer 2) as herdr tabs and workers (layer 3)
 as pane splits inside their lead's tab, launches each harness binary, waits for
-it to be ready, then injects a bootstrap prompt that registers the agent into
-agent-comms and joins its room.
+it to be ready, then injects a bootstrap prompt that joins the agent's comms room.
 
-herdr owns placement/process/status; agent-comms owns coordination. The
-orchestrator is layer 1 — the pane you are already in — and is NOT spawned here.
+herdr owns placement/process/status; the per-mission comms server (started here on
+the host, see comms_up/comms_server.py) owns coordination - agents reach it with
+the `comms` CLI over TCP. The orchestrator is layer 1 — the pane you are already
+in — and is NOT spawned here.
 
 Usage:
   python3 spawn.py up   <roster.json>          # spawns fleet, prints {role: pane_id} JSON
@@ -19,10 +20,12 @@ See orchestration/roster.example.json and .claude/commands/spawn-team.md.
 """
 import json
 import os
+import secrets
 import shutil
+import signal
+import socket
 import subprocess
 import sys
-import time
 
 # Per-harness launch template + a startup substring herdr waits for before we
 # inject the bootstrap prompt. {model}/{role} are filled per role.
@@ -36,11 +39,14 @@ HARNESSES = {
 
 READY_TIMEOUT_MS = "90000"  # ponytail: cold microVM start; raise if the VM/host gets slower
 SUBMIT_TIMEOUT_MS = "15000"  # how long to wait for an injected prompt to start running
-SQUAD_CLEANUP_WAIT_S = 8     # grace for leads to destroy their own squad room at teardown
+
+# The mission's comms server lives beside this file; started on the host per mission.
+COMMS_SERVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "comms_server.py")
 
 # Sandbox: run each mission inside one Apple `container` microVM (per-mission
 # granularity). Agents attach as `container exec` processes, so herdr's PTY
-# (banner match + send-keys) and the in-guest agent-comms mesh work unchanged.
+# (banner match + send-keys) works unchanged; coordination is the host comms
+# server reached over TCP with the `comms` CLI (COMMS_* env injected per exec).
 # Default ON; BOTFILE_NO_SANDBOX=1 runs bare on the host (debugging only).
 # See .botfile/memory/tools/sandbox.md and sandbox/build.sh.
 SANDBOX = os.environ.get("BOTFILE_NO_SANDBOX") != "1"
@@ -188,9 +194,55 @@ def mission_down(feature):
         shutil.rmtree(os.path.join(MISSIONS_ROOT, feature), ignore_errors=True)
 
 
-def sandbox_wrap(cmd, feature):
-    """Wrap a harness command so it runs inside the mission's microVM."""
-    return f"container exec -it -w /work mission-{feature} {cmd}" if SANDBOX else cmd
+def sandbox_wrap(cmd, feature, env=None):
+    """Wrap a harness command so it runs inside the mission's microVM, carrying
+    `env` (the COMMS_* identity/coords) into the agent's shell.
+
+    With env=None the output is byte-identical to the un-wrapped form, so the
+    hierarchy self-check stays valid. Bare mode prefixes the vars instead of
+    passing `-e` flags. (COMMS_* values contain no spaces, so no quoting needed.)
+    """
+    if SANDBOX:
+        flags = "".join(f"-e {k}={v} " for k, v in (env or {}).items())
+        return f"container exec -it {flags}-w /work mission-{feature} {cmd}"
+    prefix = "".join(f"{k}={v} " for k, v in (env or {}).items())
+    return f"{prefix}{cmd}"
+
+
+def _advertise_host():
+    """Primary IP that guests/remote containers can reach the host on (not loopback).
+
+    Uses the UDP-connect trick (no packet is sent) to pick the egress interface's
+    address; override with COMMS_ADVERTISE_HOST for VPN/remote topologies.
+    """
+    override = os.environ.get("COMMS_ADVERTISE_HOST")
+    if override:
+        return override
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        s.close()
+
+
+def comms_up(feature):
+    """Start this mission's authoritative comms server on the host and record how to
+    reach it in mission.json. One server per mission; killing it at teardown is the
+    room cleanup. Runs in every mode (the server is a host process, VM or not)."""
+    token = secrets.token_hex(16)
+    proc = subprocess.Popen(["python3", COMMS_SERVER, "--token", token],
+                            stdout=subprocess.PIPE, text=True)
+    line = proc.stdout.readline()  # server prints {"port": N} first, then serves forever
+    if not line:
+        proc.kill()
+        sys.exit("comms server failed to start")
+    port = json.loads(line)["port"]
+    url = f"http://{_advertise_host()}:{port}"
+    _save_state(feature, comms_url=url, comms_token=token, comms_pid=proc.pid)
+    return url
 
 
 def herdr(*args):
@@ -239,23 +291,29 @@ def validate(roster):
 
 
 def bootstrap(role, harness, feature, parent):
-    """First-turn prompt: register into agent-comms and join the right room."""
+    """First-turn prompt: join the right comms room via the `comms` CLI.
+
+    Identity is preset in $COMMS_AGENT (injected per exec), so the server upserts
+    the agent on its first call - no explicit register step.
+    """
     mission = f"mission-{feature}"
     if parent == "orchestrator":  # lead (layer 2)
         squad = f"squad-{role}"
         return (
             f"You are '{role}', a {harness} agent in mission '{feature}', parent orchestrator. "
-            f"Using the agent-comms tool: register as '{role}', join_room '{mission}', and "
-            f"create_room '{squad}' (public). Announce ready in '{mission}'. Await tasks in "
-            f"'{mission}', delegate to your workers in '{squad}', and report results up to "
-            f"'{mission}'. Never spawn agents below layer 3."
+            f"Your comms identity is preset in $COMMS_AGENT. Run these shell commands now: "
+            f"`comms join {mission}`, `comms create-room {squad}`, `comms send {mission} ready`. "
+            f"Then await tasks: poll `comms inbox` and `comms read {mission}`, delegate to your "
+            f"workers in '{squad}' with `comms send {squad} <task>`, and report results up to "
+            f"'{mission}'. Run `comms status done` when finished. Never spawn agents below layer 3."
         )
     squad = f"squad-{parent}"  # worker (layer 3)
     return (
-        f"You are '{role}', a {harness} agent, parent '{parent}'. Using the agent-comms tool: "
-        f"register as '{role}' and join_room '{squad}'. Announce ready in '{squad}'. Do the "
-        f"tasks posted there, report results back in the room, and set your status to done. "
-        f"You are a leaf — do not spawn agents."
+        f"You are '{role}', a {harness} agent, parent '{parent}'. Your comms identity is preset "
+        f"in $COMMS_AGENT. Run `comms join {squad}` then `comms send {squad} ready`. Poll "
+        f"`comms inbox` / `comms read {squad}` for tasks, do them, report results with "
+        f"`comms send {squad} <result>`, and run `comms status done`. You are a leaf — do not "
+        f"spawn agents."
     )
 
 
@@ -276,9 +334,15 @@ def submit(pane, spec):
 
 
 def launch(pane, role, harness, model, feature, parent):
-    """Run the harness in `pane`, wait for it to be ready, inject the bootstrap."""
+    """Run the harness in `pane`, wait for it to be ready, inject the bootstrap.
+
+    Each agent's shell carries its comms coordinates + identity so the baked-in
+    `comms` CLI (and its subshells) can reach the mission server as this role.
+    """
     spec = HARNESSES[harness]
-    herdr("pane", "run", pane, sandbox_wrap(spec["cmd"].format(model=model, role=role), feature))
+    st = _load_state(feature)
+    env = {"COMMS_URL": st["comms_url"], "COMMS_TOKEN": st["comms_token"], "COMMS_AGENT": role}
+    herdr("pane", "run", pane, sandbox_wrap(spec["cmd"].format(model=model, role=role), feature, env))
     herdr("wait", "output", pane, "--match", spec["ready"], "--timeout", READY_TIMEOUT_MS)
     herdr("pane", "run", pane, bootstrap(role, harness, feature, parent))
     submit(pane, spec)
@@ -287,42 +351,22 @@ def launch(pane, role, harness, model, feature, parent):
 def poke(feature, role, message=None):
     """Wake an idle agent by submitting a prompt straight into its pane.
 
-    agent-comms room messages are typed into an idle Claude agent's input but NOT
-    submitted (the bridge never sends the newline), so a delegated agent can sit idle
-    forever with the nudge unsent. `herdr pane run` types AND submits, which wakes it.
-    This is a herdr/PTY-level nudge, not an agent-comms message, so it does not put the
-    orchestrator into a worker's room - the hierarchy holds. In sandbox mode only the
-    host can reach herdr, so pokes originate from the orchestrator. Use whenever a
-    target didn't act on a room message.
+    comms delivers no push: an idle agent won't notice a new room message until it
+    next polls `comms inbox`. `herdr pane run` types AND submits a prompt, which wakes
+    the agent so it polls. This is a herdr/PTY-level nudge, not a comms message, so it
+    does not put the orchestrator into a worker's room - the hierarchy holds. In sandbox
+    mode only the host can reach herdr, so pokes originate from the orchestrator. Use
+    whenever a target didn't act on a room message. (herdr is host-pane-local, so this
+    can only wake local-VM agents - see the remote-wake gap in orchestration.md.)
     """
     st = _load_state(feature)
     info = (st.get("roles") or {}).get(role)
     if not info:
         sys.exit(f"no role {role!r} in fleet {feature!r} (run `up` first)")
-    msg = message or "Check your agent-comms rooms for new messages and act on them now."
+    msg = message or "Run `comms inbox` and act on any new messages now."
     herdr("pane", "run", info["pane"], msg)
     submit(info["pane"], HARNESSES[info["harness"]])
     print(f"poked {role} ({info['pane']})")
-
-
-COORDINATOR_PORT = "19876"  # agent-comms mesh: first bridge to bind it coordinates.
-
-
-def preflight_coordinator():
-    """Abort if a STOPPED process holds the agent-comms coordinator port.
-
-    A suspended (SIGSTOP'd) bridge keeps port 19876 bound but never accepts new
-    peers, so every bridge that starts afterward times out and falls back to its
-    own island — the whole fleet silently fails to mesh. lsof -sTCP:LISTEN gives
-    the owning pid; `ps -o stat` starting with 'T' means stopped.
-    """
-    out = subprocess.run(["lsof", "-nP", "-iTCP:" + COORDINATOR_PORT, "-sTCP:LISTEN", "-t"],
-                         capture_output=True, text=True).stdout.split()
-    for pid in out:
-        stat = subprocess.run(["ps", "-o", "stat=", "-p", pid], capture_output=True, text=True).stdout.strip()
-        if stat.startswith("T"):
-            sys.exit(f"coordinator port {COORDINATOR_PORT} held by STOPPED pid {pid} (stat {stat}); "
-                     f"a suspended bridge poisons the mesh — run `kill -9 {pid}` and re-spawn.")
 
 
 def up(roster_path):
@@ -331,9 +375,8 @@ def up(roster_path):
     feature, repo = roster["feature"], roster["repo"]
 
     if SANDBOX:
-        mission_up(feature, repo)  # the agent-comms mesh lives inside this VM now
-    else:
-        preflight_coordinator()    # bare mode: the mesh binds a host port
+        mission_up(feature, repo)  # per-mission microVM: isolated clone + creds
+    comms_up(feature)              # authoritative host comms server for this mission (all modes)
 
     ws = herdr("workspace", "create", "--cwd", repo, "--label", f"mission-{feature}", "--no-focus")
     workspace_id = ws["result"]["workspace"]["workspace_id"]
@@ -369,25 +412,15 @@ def up(roster_path):
 
 def down(feature):
     label = f"mission-{feature}"
-    # squad-<lead> rooms are owned by the lead, not the orchestrator, and a dead pane
-    # lingers as an offline member keeping the room alive - so nobody can clean them up
-    # after the fact. Poke each lead to destroy its own squad while it is still running.
-    # Best-effort: a crashed/unreachable lead just leaves its squad orphaned (no worse
-    # than before). The mission-<feature> room is orchestrator-owned; the orchestrator
-    # destroys it via agent-comms after `down` returns.
-    roles = _load_state(feature).get("roles", {})
-    poked = False
-    for role, info in roles.items():
-        if info.get("parent") == "orchestrator":
-            try:
-                poke(feature, role,
-                     f"Teardown: use the agent-comms tool to destroy_room 'squad-{role}', "
-                     f"then leave every room and stop.")
-                poked = True
-            except subprocess.CalledProcessError as e:
-                print(f"warn: lead {role!r} unreachable; squad-{role} may linger ({e})", file=sys.stderr)
-    if poked:
-        time.sleep(SQUAD_CLEANUP_WAIT_S)  # ponytail: fixed grace for leads to run destroy_room
+    # Kill the mission's comms server: it is the single authority for every room
+    # (mission + all squads), so killing it IS the room cleanup - no orphaned squad
+    # rooms, no per-lead teardown pokes. Read the pid before state is deleted below.
+    pid = _load_state(feature).get("comms_pid")
+    if pid:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass  # already gone (crashed / manually killed) - nothing to clean up
 
     closed = None
     for w in herdr("workspace", "list")["result"]["workspaces"]:
