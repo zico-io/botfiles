@@ -43,11 +43,53 @@ SUBMIT_TIMEOUT_MS = "15000"  # how long to wait for an injected prompt to start 
 SANDBOX = os.environ.get("BOTFILE_NO_SANDBOX") != "1"
 CONTAINER_IMAGE = "botfiles-agent"
 SECRETS_ROOT = "/tmp/botfile-secrets"
+MISSIONS_ROOT = "/tmp/botfile-missions"  # per-mission clone + state, keyed by feature
 
 
 def container(*args, check=True):
     """Run an Apple `container` CLI command; return stdout stripped."""
     return subprocess.run(["container", *args], capture_output=True, text=True, check=check).stdout.strip()
+
+
+def mission_workdir(feature, repo):
+    """The host dir to mount at /work — isolated per mission so parallel missions
+    on one repo don't clobber each other.
+
+    A bare `git worktree` can't be bind-mounted alone: its `.git` points into the
+    main repo's `.git`, which is outside the mount, so git breaks in the guest.
+    Instead each mission gets a self-contained local clone (hardlinked objects, so
+    it's cheap) on branch `mission-<feature>`; commits land there and are fetched
+    back into `repo` on teardown. A non-git `repo` falls back to a direct shared
+    mount (today's behavior). Only committed state is cloned.
+    """
+    if subprocess.run(["git", "-C", repo, "rev-parse", "--git-dir"], capture_output=True).returncode != 0:
+        print(f"warning: {repo} is not a git repo — missions share its files", file=sys.stderr)
+        return repo
+    work = os.path.join(MISSIONS_ROOT, feature, "work")
+    if not os.path.isdir(os.path.join(work, ".git")):
+        os.makedirs(os.path.dirname(work), exist_ok=True)
+        subprocess.run(["git", "clone", "--quiet", repo, work], check=True)
+    subprocess.run(["git", "-C", work, "checkout", "-B", f"mission-{feature}"],
+                   check=True, capture_output=True)
+    return work
+
+
+def _state_path(feature):
+    return os.path.join(MISSIONS_ROOT, feature, "mission.json")
+
+
+def harvest(feature, repo, workdir):
+    """Fetch the mission's branch back into the origin repo so its commits survive
+    the clone being deleted. Returns True on success. (Agents can't push from
+    inside the VM — origin isn't mounted there — so this runs on the host.)"""
+    branch = f"mission-{feature}"
+    r = subprocess.run(["git", "-C", repo, "fetch", workdir, f"+{branch}:{branch}"],
+                       capture_output=True, text=True)
+    if r.returncode == 0:
+        print(f"harvested {branch} into {repo}")
+        return True
+    print(f"warning: could not harvest {branch}: {r.stderr.strip()}", file=sys.stderr)
+    return False
 
 
 def mission_secrets(feature):
@@ -74,19 +116,34 @@ def mission_secrets(feature):
 
 
 def mission_up(feature, repo):
-    """Start the per-mission microVM: repo at /work, creds read-only at /secrets."""
+    """Start the per-mission microVM: isolated clone at /work, creds at /secrets."""
     name = f"mission-{feature}"
     container("rm", "-f", name, check=False)  # clear any stale container
+    workdir = mission_workdir(feature, repo)
     secrets = mission_secrets(feature)
     container("run", "-d", "--name", name,
-              "-v", f"{repo}:/work", "-v", f"{secrets}:/secrets:ro", "-w", "/work",
+              "-v", f"{workdir}:/work", "-v", f"{secrets}:/secrets:ro", "-w", "/work",
               CONTAINER_IMAGE, "sleep", "infinity")
+    os.makedirs(os.path.dirname(_state_path(feature)), exist_ok=True)
+    json.dump({"repo": repo, "workdir": workdir}, open(_state_path(feature), "w"))
     return name
 
 
 def mission_down(feature):
     container("rm", "-f", f"mission-{feature}", check=False)
     shutil.rmtree(os.path.join(SECRETS_ROOT, feature), ignore_errors=True)
+    try:
+        state = json.load(open(_state_path(feature)))
+    except FileNotFoundError:
+        shutil.rmtree(os.path.join(MISSIONS_ROOT, feature), ignore_errors=True)
+        return
+    # Harvest the mission branch before deleting the clone; keep it if harvest
+    # fails so no committed work is lost. (Direct-mount fallback has no clone.)
+    kept = state["workdir"] != state["repo"] and not harvest(feature, state["repo"], state["workdir"])
+    if kept:
+        print(f"kept mission clone at {state['workdir']} (harvest failed; work preserved)", file=sys.stderr)
+    else:
+        shutil.rmtree(os.path.join(MISSIONS_ROOT, feature), ignore_errors=True)
 
 
 def sandbox_wrap(cmd, feature):

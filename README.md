@@ -57,11 +57,16 @@ Code — a repo with only `AGENTS.md` gives Claude Code zero instructions, silen
 
 Autonomous agents run inside a microVM, not on the host. `orchestration/spawn.py`
 launches each mission in one Apple `container` microVM (`botfiles-agent` image);
-every agent attaches as a `container exec` process. The guest sees only the target
-repo (mounted at `/work`, writable) plus outbound network — the host `$HOME`, SSH
-keys, and other repos are behind the VM's kernel boundary. Harness credentials
-(claude Keychain OAuth, codex `auth.json`) are injected read-only so agents can
-reach the model APIs.
+every agent attaches as a `container exec` process. The guest sees only that
+mission's working copy (mounted at `/work`, writable) plus outbound network — the
+host `$HOME`, SSH keys, and other repos are behind the VM's kernel boundary.
+Harness credentials (claude Keychain OAuth, codex `auth.json`) are injected
+read-only so agents can reach the model APIs.
+
+Each mission gets its own local git clone on branch `mission-<feature>`, so
+parallel missions on the same repo don't clobber each other; `spawn.py down`
+fetches that branch back into your repo before removing the clone (and keeps the
+clone if the fetch fails, so committed work is never lost).
 
 ```bash
 bash sandbox/build.sh                              # install container, build the image (idempotent)
