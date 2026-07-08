@@ -10,6 +10,12 @@ with persistent, portable memory.
 - **Provenance required.** Every fact carries `<source: …, date>`.
 - **Upsert, not append-only.** Update and delete are allowed; stale facts get
   corrected, not accumulated.
+- **No em dashes.** Use a plain dash "-" instead of "—".
+- **Never auto-add the agent name** as co-author in commit messages or PRs.
+- **Never hand-edit auto-generated files.**
+- **Quality over cost.** Favor simplicity and robustness above development speed.
+- **Verify, don't assume.** Start every bug or investigation by reproducing the issue in an E2E user environment.
+- **Pixel perfect.** Watch the UI closely; fix anything that looks off.
 
 ## Memory discipline
 
