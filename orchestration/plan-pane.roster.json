@@ -1,0 +1,8 @@
+{
+  "feature": "plan-pane",
+  "repo": "/Users/percules/.botfiles",
+  "roles": [
+    {"role": "lead-plan-pane", "parent": "orchestrator", "harness": "claude", "model": "opus"},
+    {"role": "worker-pane",    "parent": "lead-plan-pane", "harness": "claude", "model": "sonnet"}
+  ]
+}
