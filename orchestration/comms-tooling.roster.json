@@ -1,0 +1,9 @@
+{
+  "feature": "comms-tooling",
+  "repo": "/Users/percules/.botfiles",
+  "roles": [
+    {"role": "lead-tooling", "parent": "orchestrator", "harness": "claude", "model": "opus"},
+    {"role": "worker-ci",    "parent": "lead-tooling",  "harness": "claude", "model": "sonnet"},
+    {"role": "worker-lint",  "parent": "lead-tooling",  "harness": "claude", "model": "sonnet"}
+  ]
+}

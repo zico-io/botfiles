@@ -50,6 +50,11 @@ SUBMIT_TIMEOUT_MS = "15000"  # how long to wait for an injected prompt to start 
 # See .botfile/memory/tools/sandbox.md and sandbox/build.sh.
 SANDBOX = os.environ.get("BOTFILE_NO_SANDBOX") != "1"
 CONTAINER_IMAGE = "botfiles-agent"
+# Per-mission VM resources. Apple `container` defaults to 4 CPU / 1 GB, which is
+# too little to run a Rust toolchain across several agents (cargo OOMs/thrashes).
+# Override per mission with MISSION_CPUS / MISSION_MEMORY.
+CONTAINER_CPUS = os.environ.get("MISSION_CPUS", "8")
+CONTAINER_MEMORY = os.environ.get("MISSION_MEMORY", "12g")
 SECRETS_ROOT = "/tmp/botfile-secrets"
 MISSIONS_ROOT = "/tmp/botfile-missions"  # per-mission clone + state, keyed by feature
 
@@ -176,6 +181,7 @@ def mission_up(feature, repo):
     workdir = mission_workdir(feature, repo)
     secrets = mission_secrets(feature)
     container("run", "-d", "--name", name,
+              "-c", CONTAINER_CPUS, "-m", CONTAINER_MEMORY,
               "-v", f"{workdir}:/work", "-v", f"{secrets}:/secrets:ro", "-w", "/work",
               CONTAINER_IMAGE, "sleep", "infinity")
     # The image ships credentials but a fresh claude still blocks on three
