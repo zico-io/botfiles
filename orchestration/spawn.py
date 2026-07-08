@@ -14,6 +14,7 @@ Usage:
   python3 spawn.py up   <roster.json> [teams]  # spawns fleet, prints {role: pane_id} JSON
                                                # teams = comma list of lead roles; omit = whole roster
   python3 spawn.py poke <feature> <role> [msg] # wake an idle agent (comms nudges don't auto-submit)
+  python3 spawn.py status <feature>            # mission health: server, container, agents, rooms
   python3 spawn.py down <feature>              # tears down squad rooms + closes the workspace
   python3 spawn.py selfcheck                   # asserts the layer/hierarchy rules
 
@@ -27,6 +28,7 @@ import signal
 import socket
 import subprocess
 import sys
+import time
 import urllib.request
 
 # Per-harness launch template + a startup substring herdr waits for before we
@@ -59,9 +61,23 @@ SECRETS_ROOT = "/tmp/botfile-secrets"
 MISSIONS_ROOT = "/tmp/botfile-missions"  # per-mission clone + state, keyed by feature
 
 
-def container(*args, check=True):
+def container(*args, check=True, timeout=None):
     """Run an Apple `container` CLI command; return stdout stripped."""
-    return subprocess.run(["container", *args], capture_output=True, text=True, check=check).stdout.strip()
+    return subprocess.run(["container", *args], capture_output=True, text=True,
+                          check=check, timeout=timeout).stdout.strip()
+
+
+def _force_kill_container(name):
+    """SIGKILL the per-mission runtime process for a wedged VM (its uuid == name).
+    A thrashed guest can hang the Apple `container` daemon so `rm`/`stop` block
+    forever; killing container-runtime-linux directly lets the daemon reap it."""
+    out = subprocess.run(["pgrep", "-f", f"container-runtime-linux.*--uuid {name}"],
+                         capture_output=True, text=True).stdout.split()
+    for pid in out:
+        try:
+            os.kill(int(pid), signal.SIGKILL)
+        except (ProcessLookupError, ValueError):
+            pass
 
 
 def mission_workdir(feature, repo):
@@ -116,6 +132,15 @@ def harvest(feature, repo, workdir):
                        capture_output=True, text=True)
     if r.returncode == 0:
         print(f"harvested {branch} into {repo}")
+        return True
+    # git refuses to update a branch that is checked out in a worktree. Preserve the
+    # commits under a side ref so the clone is still safe to delete; the branch itself
+    # keeps whatever it had (usually already up to date - that's why it was checked out).
+    backup = f"refs/botfile-harvest/{feature}"
+    r2 = subprocess.run(["git", "-C", repo, "fetch", workdir, f"+{branch}:{backup}"],
+                        capture_output=True, text=True)
+    if r2.returncode == 0:
+        print(f"harvested {branch} -> {backup} ({branch} busy: {r.stderr.strip()})")
         return True
     print(f"warning: could not harvest {branch}: {r.stderr.strip()}", file=sys.stderr)
     return False
@@ -197,7 +222,12 @@ def mission_up(feature, repo):
 
 
 def mission_down(feature):
-    container("rm", "-f", f"mission-{feature}", check=False)
+    name = f"mission-{feature}"
+    try:
+        container("rm", "-f", name, check=False, timeout=30)
+    except subprocess.TimeoutExpired:
+        print(f"`container rm {name}` hung; force-killing its runtime", file=sys.stderr)
+        _force_kill_container(name)
     shutil.rmtree(os.path.join(SECRETS_ROOT, feature), ignore_errors=True)
     try:
         state = json.load(open(_state_path(feature)))
@@ -247,6 +277,40 @@ def _advertise_host():
         s.close()
 
 
+def _pid_alive(pid):
+    """True if `pid` is a live process (owned by us or anyone)."""
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except (PermissionError, ValueError):
+        return True  # exists but not ours (still alive)
+
+
+def _read_port(log_path, proc, deadline=10):
+    """Wait for the server's `{"port": N}` first log line; fail loud on early exit."""
+    end = time.time() + deadline
+    while time.time() < end:
+        if proc.poll() is not None:
+            sys.exit(f"comms server exited early (rc={proc.returncode}); see {log_path}")
+        first = ""
+        try:
+            with open(log_path) as f:
+                first = f.readline().strip()
+        except FileNotFoundError:
+            pass
+        if first:
+            try:
+                return json.loads(first)["port"]
+            except (json.JSONDecodeError, KeyError):
+                proc.kill()
+                sys.exit(f"comms server first line was not a port: {first!r} (see {log_path})")
+        time.sleep(0.05)
+    proc.kill()
+    sys.exit(f"comms server never reported a port within {deadline}s (see {log_path})")
+
+
 def comms_up(feature):
     """Start this mission's authoritative comms server (`comms serve`) on the host and
     record how to reach it in mission.json. One server per mission; killing it at
@@ -257,13 +321,18 @@ def comms_up(feature):
     state_dir = os.path.join(MISSIONS_ROOT, feature)
     os.makedirs(state_dir, exist_ok=True)
     db = os.path.join(state_dir, "comms.db")
-    proc = subprocess.Popen(["comms", "serve", "--token", token, "--db", db],
-                            stdout=subprocess.PIPE, text=True)
-    line = proc.stdout.readline()  # server prints {"port": N} first, then serves forever
-    if not line:
-        proc.kill()
-        sys.exit("comms server failed to start (is the `comms` binary on PATH? run provision.sh)")
-    port = json.loads(line)["port"]
+    log_path = os.path.join(state_dir, "comms.log")
+    log = open(log_path, "w")
+    try:
+        # start_new_session detaches the server from spawn.py's process group so a
+        # Ctrl-C / pane close in the launching terminal can't take it down mid-mission.
+        # Output goes to comms.log (not a pipe) so it can never block on a full buffer
+        # and leaves a trace if the server dies.
+        proc = subprocess.Popen(["comms", "serve", "--token", token, "--db", db],
+                                stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    except FileNotFoundError:
+        sys.exit("comms server failed to start: `comms` binary not on PATH (run provision.sh)")
+    port = _read_port(log_path, proc)
     url = f"http://{_advertise_host()}:{port}"
     _save_state(feature, comms_url=url, comms_token=token, comms_pid=proc.pid)
     return url
@@ -444,48 +513,75 @@ def select_leads(roster, only=None):
     return [l for l in leads if l["role"] in want]
 
 
+def _reset_mission_state(feature):
+    """Clear a prior run's comms DB + log so a fresh `up` starts from clean
+    coordination state. A leftover comms.db (from an interrupted `down`) would
+    resurrect its rooms/messages and boot the new agents onto stale instructions.
+    The mid-mission server *restart* path reuses the db and does not call this.
+    Leaves the mission clone (work/) untouched."""
+    d = os.path.join(MISSIONS_ROOT, feature)
+    for f in ("comms.db", "comms.db-wal", "comms.db-shm", "comms.log"):
+        try:
+            os.remove(os.path.join(d, f))
+        except FileNotFoundError:
+            pass
+
+
 def up(roster_path, only=None):
     roster = json.load(open(roster_path))
     validate(roster)
     feature, repo = roster["feature"], roster["repo"]
-
-    if SANDBOX:
-        mission_up(feature, repo)  # per-mission microVM: isolated clone + creds
-    comms_up(feature)              # authoritative host comms server for this mission (all modes)
-    # Seed the mission room owned by the orchestrator (the pane the human drives).
-    # Leads then `join` it deterministically, and the orchestrator can `comms send`
-    # without a manual join step.
-    comms_post(feature, "orchestrator", "create-room", name=f"mission-{feature}")
-
-    ws = herdr("workspace", "create", "--cwd", repo, "--label", f"mission-{feature}", "--no-focus")
-    workspace_id = ws["result"]["workspace"]["workspace_id"]
-    root_tab = ws["result"]["tab"]["tab_id"]
-    root_pane = ws["result"]["root_pane"]["pane_id"]
+    _reset_mission_state(feature)
 
     panes = {}
-    leads = select_leads(roster, only)
-    for i, lead in enumerate(leads):
-        if i == 0:  # reuse the workspace's default tab for the first lead
-            herdr("tab", "rename", root_tab, lead["role"])
-            pane = root_pane
-        else:
-            tab = herdr("tab", "create", "--workspace", workspace_id, "--label", lead["role"])
-            pane = tab["result"]["root_pane"]["pane_id"]
-        launch(pane, lead["role"], lead["harness"], lead["model"], feature, "orchestrator")
-        panes[lead["role"]] = pane
+    try:
+        if SANDBOX:
+            mission_up(feature, repo)  # per-mission microVM: isolated clone + creds
+        comms_up(feature)              # authoritative host comms server for this mission (all modes)
+        # Seed the mission room owned by the orchestrator (the pane the human drives).
+        # Leads then `join` it deterministically, and the orchestrator can `comms send`
+        # without a manual join step.
+        comms_post(feature, "orchestrator", "create-room", name=f"mission-{feature}")
 
-        anchor = pane
-        for w in [r for r in roster["roles"] if r["parent"] == lead["role"]]:
-            split = herdr("pane", "split", anchor, "--direction", "right", "--no-focus")
-            wp = split["result"]["pane"]["pane_id"]
-            launch(wp, w["role"], w["harness"], w["model"], feature, lead["role"])
-            panes[w["role"]] = wp
-            anchor = wp
+        ws = herdr("workspace", "create", "--cwd", repo, "--label", f"mission-{feature}", "--no-focus")
+        workspace_id = ws["result"]["workspace"]["workspace_id"]
+        root_tab = ws["result"]["tab"]["tab_id"]
+        root_pane = ws["result"]["root_pane"]["pane_id"]
 
-    # Record role -> pane so `poke`/`down` can reach agents after `up` returns.
-    roles = {r["role"]: {"pane": panes[r["role"]], "parent": r["parent"], "harness": r["harness"]}
-             for r in roster["roles"] if r["role"] in panes}
-    _save_state(feature, roles=roles)
+        leads = select_leads(roster, only)
+        for i, lead in enumerate(leads):
+            if i == 0:  # reuse the workspace's default tab for the first lead
+                herdr("tab", "rename", root_tab, lead["role"])
+                pane = root_pane
+            else:
+                tab = herdr("tab", "create", "--workspace", workspace_id, "--label", lead["role"])
+                pane = tab["result"]["root_pane"]["pane_id"]
+            launch(pane, lead["role"], lead["harness"], lead["model"], feature, "orchestrator")
+            panes[lead["role"]] = pane
+
+            anchor = pane
+            for w in [r for r in roster["roles"] if r["parent"] == lead["role"]]:
+                split = herdr("pane", "split", anchor, "--direction", "right", "--no-focus")
+                wp = split["result"]["pane"]["pane_id"]
+                launch(wp, w["role"], w["harness"], w["model"], feature, lead["role"])
+                panes[w["role"]] = wp
+                anchor = wp
+
+        # Record role -> pane so `poke`/`down` can reach agents after `up` returns.
+        roles = {r["role"]: {"pane": panes[r["role"]], "parent": r["parent"], "harness": r["harness"]}
+                 for r in roster["roles"] if r["role"] in panes}
+        _save_state(feature, roles=roles)
+    except BaseException as e:
+        # Never leave an orphan microVM / half-built workspace / server behind on a
+        # failed (or interrupted) `up`; tear down whatever was started, then re-raise.
+        print(f"up failed ({type(e).__name__}: {e}); tearing down partial {feature}", file=sys.stderr)
+        try:
+            down(feature)
+        except SystemExit:
+            pass  # down exits non-zero when there was nothing to close - fine here
+        except Exception:
+            pass
+        raise
     print(json.dumps(panes))
 
 
@@ -515,6 +611,42 @@ def down(feature):
         print(f"closed {label} ({closed})")
     else:
         sys.exit(f"no workspace labelled {label}")
+
+
+def status(feature):
+    """One-shot mission health: comms server, container, agents, room activity.
+    Replaces the manual ps/lsof/container/comms dig used to diagnose a stall."""
+    st = _load_state(feature)
+    if not st:
+        sys.exit(f"no mission state for {feature} (is it up?)")
+    out = [f"mission: {feature}"]
+
+    pid = st.get("comms_pid")
+    alive = bool(pid) and _pid_alive(pid)
+    out.append(f"  comms server: pid {pid} {'ALIVE' if alive else 'DEAD'}  {st.get('comms_url','?')}")
+    if not alive:
+        out.append(f"    (restart: comms serve --token {st.get('comms_token','?')} "
+                   f"--port <port-from-url> --db {os.path.join(MISSIONS_ROOT, feature, 'comms.db')})")
+
+    if SANDBOX:
+        rows = subprocess.run(["container", "list"], capture_output=True, text=True).stdout.splitlines()
+        row = next((r for r in rows if f"mission-{feature}" in r), None)
+        out.append(f"  container: {'running' if row else 'NOT running'}")
+
+    if alive:
+        try:
+            agents = comms_post(feature, "orchestrator", "agents").get("agents", [])
+            out.append("  agents: " + (", ".join(f"{a['id']}({a['status']})" for a in agents) or "(none)"))
+            for r in comms_post(feature, "orchestrator", "rooms").get("rooms", []):
+                # peek (non-consuming) from seq 0 so status never eats the orchestrator's cursor
+                msgs = comms_post(feature, "orchestrator", "read",
+                                  room=r["name"], since=0, peek=True).get("messages", [])
+                last = msgs[-1] if msgs else None
+                tail = f'  last[{last["seq"]}] {last["from"]}: {last["text"][:70]}' if last else ""
+                out.append(f"  room {r['name']}: {len(msgs)} msgs{tail}")
+        except Exception as e:
+            out.append(f"  (comms query failed: {e})")
+    print("\n".join(out))
 
 
 def selfcheck():
@@ -582,6 +714,8 @@ if __name__ == "__main__":
         up(args[1], args[2] if len(args) == 3 else None)
     elif args[:1] == ["poke"] and 3 <= len(args) <= 4:
         poke(args[1], args[2], args[3] if len(args) == 4 else None)
+    elif args[:1] == ["status"] and len(args) == 2:
+        status(args[1])
     elif args[:1] == ["down"] and len(args) == 2:
         down(args[1])
     elif args == ["selfcheck"]:

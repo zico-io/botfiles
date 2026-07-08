@@ -36,10 +36,17 @@ echo "ensured @import in $HOME/.claude/CLAUDE.md"
 COMMS_DIR="$(dirname "$SSOT")/comms"
 if [ -d "$COMMS_DIR" ]; then
   if command -v cargo >/dev/null 2>&1; then
-    ( cd "$COMMS_DIR" && cargo build --release --quiet ) \
-      && ln -sf "$COMMS_DIR/target/release/comms" /usr/local/bin/comms 2>/dev/null \
-      && echo "built + linked /usr/local/bin/comms -> $COMMS_DIR/target/release/comms" \
-      || echo "note: comms build/symlink failed (add $COMMS_DIR/target/release to PATH manually)"
+    if ( cd "$COMMS_DIR" && cargo build --release --quiet ); then
+      BIN="$COMMS_DIR/target/release/comms"
+      # spawn.py's comms_up invokes `comms` by name, so it must be on PATH. ~/.local/bin
+      # needs no sudo and is already on PATH; also drop it in /usr/local/bin when writable.
+      mkdir -p "$HOME/.local/bin"
+      ln -sf "$BIN" "$HOME/.local/bin/comms"
+      ln -sf "$BIN" /usr/local/bin/comms 2>/dev/null || true
+      echo "built + linked comms -> $HOME/.local/bin/comms"
+    else
+      echo "note: comms build failed (add $COMMS_DIR/target/release to PATH manually)"
+    fi
   else
     echo "note: cargo not found — install Rust (https://rustup.rs) to build the comms binary"
   fi
