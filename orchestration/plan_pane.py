@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""plan_pane.py — live-editor surface for the /scope-mission draft brief.
+"""plan_pane.py - live-editor surface for the /scope-mission draft brief.
 
 Opens the brief in a split herdr pane running the human's Helix (`hx`), so
 they can edit and save it directly instead of dictating every change through
@@ -62,15 +62,23 @@ def herdr(*args):
 
 def open_editor(path):
     """Split a pane off the caller's own pane (no focus stolen) and launch hx on `path`
-    in it. Returns the new pane id."""
-    split = herdr("pane", "split", "--no-focus")
+    in it. Returns the new pane id.
+
+    No anchor is passed (unlike spawn.py, which always splits an explicitly-created
+    pane it doesn't own) - this call runs interactively from inside the orchestrator's
+    own herdr pane, so a bare `pane split` is assumed to default to splitting the
+    caller's active pane. HOST-E2E ASSUMPTION, unverified in this sandbox (no herdr
+    socket) - confirm live."""
+    split = herdr("pane", "split", "--direction", "right", "--no-focus")
     pane = split["result"]["pane"]["pane_id"]
     herdr("pane", "run", pane, f"hx {path}")
     return pane
 
 
 def close_editor(pane_id):
-    """Close the editor pane opened by open_editor()."""
+    """Close the editor pane opened by open_editor(). `pane close` is a best-guess
+    herdr verb (by analogy with spawn.py's `workspace close`/`tab create`/`pane
+    split`/`pane run`) - unverified in this sandbox (no herdr socket), confirm live."""
     herdr("pane", "close", pane_id)
 
 

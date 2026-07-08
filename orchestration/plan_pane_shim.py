@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""plan_pane_shim.py — invoked by the Helix keybind installed by
+"""plan_pane_shim.py - invoked by the Helix keybind installed by
 `plan_pane.py install-keybind`. Not meant to be run by hand.
 
 Reads the piped primary-selection TEXT on stdin, takes [buffer_name,
