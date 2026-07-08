@@ -1,0 +1,35 @@
+# botfiles-agent — sandbox image for autonomous harness agents.
+# One microVM per mission (Apple `container`); each agent runs as a
+# `container exec` process inside it. Built by sandbox/build.sh.
+# See .botfile/memory/tools/sandbox.md.
+FROM debian:trixie-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git curl ca-certificates python3 nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
+
+# Harnesses + the agent-comms coordination mesh (all node CLIs, linux/arm64).
+# ponytail: if a harness has no linux/arm64 build, drop it here — don't fake it.
+RUN npm install -g \
+      @anthropic-ai/claude-code \
+      @openai/codex \
+      @earendil-works/pi-coding-agent \
+      agent-comms
+
+# Bake the SSOT and reuse the host provisioner to wire AGENTS.md + agent-comms
+# into each harness's in-guest config (HOME=/root at build time).
+COPY AGENTS.md /opt/botfiles/AGENTS.md
+COPY provision.sh /opt/botfiles/provision.sh
+RUN chmod +x /opt/botfiles/provision.sh && /opt/botfiles/provision.sh
+
+COPY sandbox/entrypoint.sh /usr/local/bin/entrypoint
+RUN chmod +x /usr/local/bin/entrypoint
+
+# This whole image is the sandbox boundary, so the harnesses' root-guard on
+# --dangerously-skip-permissions is redundant here. IS_SANDBOX=1 is claude's
+# supported opt-out for exactly this containerized case.
+ENV IS_SANDBOX=1
+
+WORKDIR /work
+ENTRYPOINT ["/usr/local/bin/entrypoint"]
+CMD ["sleep", "infinity"]

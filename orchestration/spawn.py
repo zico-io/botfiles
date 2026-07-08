@@ -17,6 +17,8 @@ Usage:
 See orchestration/roster.example.json and .claude/commands/spawn-team.md.
 """
 import json
+import os
+import shutil
 import subprocess
 import sys
 
@@ -32,6 +34,64 @@ HARNESSES = {
 
 READY_TIMEOUT_MS = "60000"
 SUBMIT_TIMEOUT_MS = "15000"  # how long to wait for an injected prompt to start running
+
+# Sandbox: run each mission inside one Apple `container` microVM (per-mission
+# granularity). Agents attach as `container exec` processes, so herdr's PTY
+# (banner match + send-keys) and the in-guest agent-comms mesh work unchanged.
+# Default ON; BOTFILE_NO_SANDBOX=1 runs bare on the host (debugging only).
+# See .botfile/memory/tools/sandbox.md and sandbox/build.sh.
+SANDBOX = os.environ.get("BOTFILE_NO_SANDBOX") != "1"
+CONTAINER_IMAGE = "botfiles-agent"
+SECRETS_ROOT = "/tmp/botfile-secrets"
+
+
+def container(*args, check=True):
+    """Run an Apple `container` CLI command; return stdout stripped."""
+    return subprocess.run(["container", *args], capture_output=True, text=True, check=check).stdout.strip()
+
+
+def mission_secrets(feature):
+    """Write harness credentials to a per-mission dir mounted read-only into the VM.
+
+    claude keeps its OAuth cred in the macOS Keychain (no file); export it to a
+    .credentials.json the Linux guest reads. codex already keeps an auth file.
+    The secret goes straight to disk and into the guest, never to stdout — the
+    sandbox necessarily gets a copy so agents can call the model APIs (same trust
+    as running the harness on the host). Absent creds are skipped, not faked.
+    """
+    d = os.path.join(SECRETS_ROOT, feature)
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    cred = os.path.join(d, "claude.credentials.json")
+    with open(cred, "wb") as f:
+        rc = subprocess.run(["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
+                            stdout=f, stderr=subprocess.DEVNULL).returncode
+    if rc != 0 or os.path.getsize(cred) == 0:
+        os.remove(cred)
+    codex = os.path.expanduser("~/.codex/auth.json")
+    if os.path.exists(codex):
+        shutil.copyfile(codex, os.path.join(d, "codex.auth.json"))
+    return d
+
+
+def mission_up(feature, repo):
+    """Start the per-mission microVM: repo at /work, creds read-only at /secrets."""
+    name = f"mission-{feature}"
+    container("rm", "-f", name, check=False)  # clear any stale container
+    secrets = mission_secrets(feature)
+    container("run", "-d", "--name", name,
+              "-v", f"{repo}:/work", "-v", f"{secrets}:/secrets:ro", "-w", "/work",
+              CONTAINER_IMAGE, "sleep", "infinity")
+    return name
+
+
+def mission_down(feature):
+    container("rm", "-f", f"mission-{feature}", check=False)
+    shutil.rmtree(os.path.join(SECRETS_ROOT, feature), ignore_errors=True)
+
+
+def sandbox_wrap(cmd, feature):
+    """Wrap a harness command so it runs inside the mission's microVM."""
+    return f"container exec -it -w /work mission-{feature} {cmd}" if SANDBOX else cmd
 
 
 def herdr(*args):
@@ -103,7 +163,7 @@ def bootstrap(role, harness, feature, parent):
 def launch(pane, role, harness, model, feature, parent):
     """Run the harness in `pane`, wait for it to be ready, inject the bootstrap."""
     spec = HARNESSES[harness]
-    herdr("pane", "run", pane, spec["cmd"].format(model=model, role=role))
+    herdr("pane", "run", pane, sandbox_wrap(spec["cmd"].format(model=model, role=role), feature))
     herdr("wait", "output", pane, "--match", spec["ready"], "--timeout", READY_TIMEOUT_MS)
     herdr("pane", "run", pane, bootstrap(role, harness, feature, parent))
     # A freshly-split pane can swallow the submit newline before its TUI is ready,
@@ -117,10 +177,35 @@ def launch(pane, role, harness, model, feature, parent):
         herdr("wait", "output", pane, "--match", spec["working"], "--timeout", SUBMIT_TIMEOUT_MS)
 
 
+COORDINATOR_PORT = "19876"  # agent-comms mesh: first bridge to bind it coordinates.
+
+
+def preflight_coordinator():
+    """Abort if a STOPPED process holds the agent-comms coordinator port.
+
+    A suspended (SIGSTOP'd) bridge keeps port 19876 bound but never accepts new
+    peers, so every bridge that starts afterward times out and falls back to its
+    own island — the whole fleet silently fails to mesh. lsof -sTCP:LISTEN gives
+    the owning pid; `ps -o stat` starting with 'T' means stopped.
+    """
+    out = subprocess.run(["lsof", "-nP", "-iTCP:" + COORDINATOR_PORT, "-sTCP:LISTEN", "-t"],
+                         capture_output=True, text=True).stdout.split()
+    for pid in out:
+        stat = subprocess.run(["ps", "-o", "stat=", "-p", pid], capture_output=True, text=True).stdout.strip()
+        if stat.startswith("T"):
+            sys.exit(f"coordinator port {COORDINATOR_PORT} held by STOPPED pid {pid} (stat {stat}); "
+                     f"a suspended bridge poisons the mesh — run `kill -9 {pid}` and re-spawn.")
+
+
 def up(roster_path):
     roster = json.load(open(roster_path))
     validate(roster)
     feature, repo = roster["feature"], roster["repo"]
+
+    if SANDBOX:
+        mission_up(feature, repo)  # the agent-comms mesh lives inside this VM now
+    else:
+        preflight_coordinator()    # bare mode: the mesh binds a host port
 
     ws = herdr("workspace", "create", "--cwd", repo, "--label", f"mission-{feature}", "--no-focus")
     workspace_id = ws["result"]["workspace"]["workspace_id"]
@@ -152,12 +237,18 @@ def up(roster_path):
 
 def down(feature):
     label = f"mission-{feature}"
+    closed = None
     for w in herdr("workspace", "list")["result"]["workspaces"]:
         if w.get("label") == label:
             herdr("workspace", "close", w["workspace_id"])
-            print(f"closed {label} ({w['workspace_id']})")
-            return
-    sys.exit(f"no workspace labelled {label}")
+            closed = w["workspace_id"]
+            break
+    if SANDBOX:
+        mission_down(feature)  # stop the microVM + wipe its secrets, always
+    if closed:
+        print(f"closed {label} ({closed})")
+    else:
+        sys.exit(f"no workspace labelled {label}")
 
 
 def selfcheck():
@@ -190,6 +281,12 @@ def selfcheck():
     assert rejects({"feature": "t", "repo": "/tmp", "roles": [
         {"role": "w1", "parent": "ghost", "harness": "claude", "model": "x"},
     ]})
+
+    # sandbox wrap: harness cmd runs inside the mission microVM (or bare when off)
+    if SANDBOX:
+        assert sandbox_wrap("claude --x", "t") == "container exec -it -w /work mission-t claude --x"
+    else:
+        assert sandbox_wrap("claude --x", "t") == "claude --x"
     print("selfcheck ok")
 
 
