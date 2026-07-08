@@ -34,7 +34,7 @@ HARNESSES = {
     "pi":     {"cmd": "pi --name {role} --model {model}", "ready": "pi", "working": "esc to interrupt"},
 }
 
-READY_TIMEOUT_MS = "60000"
+READY_TIMEOUT_MS = "90000"  # ponytail: cold microVM start; raise if the VM/host gets slower
 SUBMIT_TIMEOUT_MS = "15000"  # how long to wait for an injected prompt to start running
 SQUAD_CLEANUP_WAIT_S = 8     # grace for leads to destroy their own squad room at teardown
 
@@ -134,6 +134,23 @@ def mission_secrets(feature):
     return d
 
 
+# Pre-answers claude's first-run prompts inside the mission VM (see mission_up).
+CLAUDE_SEED = (
+    "import json,os\n"
+    "cj='/root/.claude.json'\n"
+    "d=json.load(open(cj)) if os.path.exists(cj) else {}\n"
+    "d['hasCompletedOnboarding']=True\n"
+    "d.setdefault('theme','dark')\n"
+    "d.setdefault('projects',{}).setdefault('/work',{})['hasTrustDialogAccepted']=True\n"
+    "json.dump(d,open(cj,'w'))\n"
+    "sj='/root/.claude/settings.json'\n"
+    "s=json.load(open(sj)) if os.path.exists(sj) else {}\n"
+    "s['skipDangerousModePermissionPrompt']=True\n"
+    "os.makedirs('/root/.claude',exist_ok=True)\n"
+    "json.dump(s,open(sj,'w'))\n"
+)
+
+
 def mission_up(feature, repo):
     """Start the per-mission microVM: isolated clone at /work, creds at /secrets."""
     name = f"mission-{feature}"
@@ -143,6 +160,12 @@ def mission_up(feature, repo):
     container("run", "-d", "--name", name,
               "-v", f"{workdir}:/work", "-v", f"{secrets}:/secrets:ro", "-w", "/work",
               CONTAINER_IMAGE, "sleep", "infinity")
+    # The image ships credentials but a fresh claude still blocks on three
+    # first-run prompts that --dangerously-skip-permissions does NOT skip:
+    # the theme picker, the /work folder-trust dialog, and the bypass-mode
+    # acceptance. Pre-answer all three so the TUI boots straight to ready.
+    # Idempotent; harmless for codex-only missions.
+    container("exec", name, "python3", "-c", CLAUDE_SEED)
     os.makedirs(os.path.dirname(_state_path(feature)), exist_ok=True)
     json.dump({"repo": repo, "workdir": workdir}, open(_state_path(feature), "w"))
     return name
