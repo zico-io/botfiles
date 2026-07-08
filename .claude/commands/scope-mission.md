@@ -69,7 +69,46 @@ a work artifact, not a memory fact; no em dashes, use `-`). One section per dime
 each lead reads and relays it to its squad - so write it to be read cold by an agent with
 no other context.
 
-## 3. Draft the roster
+Right after writing the brief, open it in a live editor pane so the human can edit it
+directly instead of dictating every change through chat:
+
+```
+python3 orchestration/plan_pane.py open orchestration/$ARGUMENTS.brief.md
+```
+
+This splits a right-hand herdr pane running the human's Helix (`hx`) on the brief without
+stealing focus, and prints the new pane id. Remember that pane id - you close it at
+hand-off. If the command fails (no herdr socket, Helix missing), say so and fall back to
+plain chat-driven editing; the rest of the interview still works.
+
+## 3. Collaborate on the brief through the pane
+
+From now until hand-off the brief is a shared surface: the human edits and saves it in the
+pane, and pushes selections to you with the Helix keybind (see
+`orchestration/plan_pane.py install-keybind`). The pane never interrupts you - it is
+passive until your turn. So **before composing each response**, do two cheap checks:
+
+1. **Pick up saves.** Re-read `orchestration/$ARGUMENTS.brief.md` (its mtime changes on
+   `:w`). If the human changed it, treat the file on disk as the source of truth, fold
+   their edits into your understanding, and do not clobber them - your next write must
+   build on their version, not overwrite it.
+2. **Pick up selections.** Run:
+
+   ```
+   python3 orchestration/plan_pane.py selection
+   ```
+
+   It prints (and clears) any pushed selection: the file, the line range, the enclosing
+   `##` section, and the selected text. Empty output means nothing was pushed. When a
+   selection is present, reference it directly - quote the selected lines and name the
+   section and line numbers ("in ## Non-goals, lines 22-24, you selected ...") so the
+   human knows you are looking at exactly what they marked. Multi-cursor selections
+   collapse to the primary selection.
+
+Keep interviewing and refining the brief in this loop. Write your edits back to the file
+so the human sees them appear in the pane.
+
+## 4. Draft the roster
 
 Write `orchestration/$ARGUMENTS.roster.json` from the team plan, matching
 `orchestration/roster.example.json`:
@@ -93,8 +132,14 @@ teams. Show the human the drafted roster and let them adjust before you finish. 
 it with `python3 orchestration/spawn.py selfcheck` is not enough - the hierarchy check
 runs inside `up`; sanity-check by eye that it parses and the parent links are sound.
 
-## 4. Hand off
+## 5. Hand off
 
-Finish by telling the human the two files are written and pointing them at:
+Close the editor pane you opened in step 2 (use the pane id it printed):
+
+```
+python3 orchestration/plan_pane.py close <pane-id>
+```
+
+Then finish by telling the human the two files are written and pointing them at:
 `/spawn-team orchestration/$ARGUMENTS.roster.json` (run from inside herdr). Remind them
 `up` will auto-post the brief into the mission room - no manual step.
