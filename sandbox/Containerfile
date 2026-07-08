@@ -2,10 +2,24 @@
 # One microVM per mission (Apple `container`); each agent runs as a
 # `container exec` process inside it. Built by sandbox/build.sh.
 # See .botfile/memory/tools/sandbox.md.
+
+# Stage 1: build the comms binary for the guest (linux). rusqlite's `bundled`
+# feature compiles SQLite from source, so only a C toolchain is needed - no
+# system libsqlite. The host builds its own copy natively via provision.sh.
+FROM rust:1-slim AS comms-build
+WORKDIR /src
+COPY comms/Cargo.toml comms/Cargo.toml
+COPY comms/src comms/src
+RUN cd comms && cargo build --release && strip target/release/comms
+
 FROM debian:trixie-slim
 
+# Node 22 from NodeSource: pi's bundled undici 8.x calls worker_threads
+# markAsUncloneable, which Debian trixie's Node 20 lacks (pi crashes on boot).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git curl ca-certificates python3 nodejs npm \
+      git curl ca-certificates python3 \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Harnesses (all node CLIs, linux/arm64). Coordination is the host comms server
@@ -22,10 +36,10 @@ COPY AGENTS.md /opt/botfiles/AGENTS.md
 COPY provision.sh /opt/botfiles/provision.sh
 RUN chmod +x /opt/botfiles/provision.sh && /opt/botfiles/provision.sh
 
-# The comms client agents call to reach the mission's host comms server over TCP
+# The comms binary agents call to reach the mission's host comms server over TCP
 # (COMMS_URL/COMMS_TOKEN/COMMS_AGENT are injected per `container exec`), plus
 # wcommit — the serialized commit wrapper workers use since they share one clone.
-COPY bin/comms /usr/local/bin/comms
+COPY --from=comms-build /src/comms/target/release/comms /usr/local/bin/comms
 COPY bin/wcommit /usr/local/bin/wcommit
 RUN chmod +x /usr/local/bin/comms /usr/local/bin/wcommit
 

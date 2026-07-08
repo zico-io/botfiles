@@ -13,20 +13,34 @@ for dir in "$HOME/.codex" "$HOME/.pi/agent"; do
   echo "linked $dir/AGENTS.md -> $SSOT"
 done
 
+# Pi local-model endpoints: symlink the repo's SSOT models.json into pi's config
+# so edits propagate live (same philosophy as AGENTS.md). Bring the servers up
+# with bin/local-models up.
+PI_MODELS="$(dirname "$SSOT")/orchestration/pi-models.json"
+if [ -f "$PI_MODELS" ]; then
+  mkdir -p "$HOME/.pi/agent"
+  ln -sf "$PI_MODELS" "$HOME/.pi/agent/models.json"
+  echo "linked $HOME/.pi/agent/models.json -> $PI_MODELS"
+fi
+
 # Claude Code only reads CLAUDE.md -> ensure the @import line, without clobbering.
 mkdir -p "$HOME/.claude"
 touch "$HOME/.claude/CLAUDE.md"
 grep -qxF "@$SSOT" "$HOME/.claude/CLAUDE.md" || printf '@%s\n' "$SSOT" >> "$HOME/.claude/CLAUDE.md"
 echo "ensured @import in $HOME/.claude/CLAUDE.md"
 
-# comms client: agent coordination is now the per-mission host comms server
-# (orchestration/comms_server.py), reached with the stdlib `comms` CLI over TCP -
-# no MCP server, no in-guest daemon. Put `comms` on the host orchestrator's PATH.
-# (In the image build this source path is absent; the Containerfile COPYs the
-# client into the guest instead, so the guard keeps the build clean.)
-COMMS_SRC="$(dirname "$SSOT")/bin/comms"
-if [ -f "$COMMS_SRC" ]; then
-  ln -sf "$COMMS_SRC" /usr/local/bin/comms 2>/dev/null \
-    && echo "linked /usr/local/bin/comms -> $COMMS_SRC" \
-    || echo "note: could not symlink comms into /usr/local/bin (add $COMMS_SRC to PATH manually)"
+# comms: one Rust binary that is both the per-mission server (`comms serve`) and the
+# client agents call. Build it for the host and put it on the orchestrator's PATH.
+# (In the image build this source tree is absent; the Containerfile builds the guest
+# binary in a multi-stage step instead, so the guard keeps the image build clean.)
+COMMS_DIR="$(dirname "$SSOT")/comms"
+if [ -d "$COMMS_DIR" ]; then
+  if command -v cargo >/dev/null 2>&1; then
+    ( cd "$COMMS_DIR" && cargo build --release --quiet ) \
+      && ln -sf "$COMMS_DIR/target/release/comms" /usr/local/bin/comms 2>/dev/null \
+      && echo "built + linked /usr/local/bin/comms -> $COMMS_DIR/target/release/comms" \
+      || echo "note: comms build/symlink failed (add $COMMS_DIR/target/release to PATH manually)"
+  else
+    echo "note: cargo not found — install Rust (https://rustup.rs) to build the comms binary"
+  fi
 fi

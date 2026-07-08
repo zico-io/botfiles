@@ -39,8 +39,10 @@ CLI** talking to a per-mission **comms server** on the host (coordination). Max
 Rooms are public, joined by name. The orchestrator never messages a worker
 directly. Stand up / tear down a fleet from a roster with
 `orchestration/spawn.py` (`up`/`down`) or the `/spawn-team` command; `up` starts
-the mission's comms server and `down` kills it (rooms die with it). Harnesses are
-claude/codex/pi. See `.botfile/memory/tools/orchestration.md`.
+the mission's comms server and `down` kills it (rooms die with it). A roster is a
+catalog of teams: the orchestrator spawns only the team(s) a mission needs (pass
+lead roles to `up`, or omit for all), not the whole roster every time. Harnesses
+are claude/codex/pi. See `.botfile/memory/tools/orchestration.md`.
 
 ## Entity discipline
 

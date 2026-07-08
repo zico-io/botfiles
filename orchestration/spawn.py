@@ -5,13 +5,14 @@ Reads a roster JSON, spawns leads (layer 2) as herdr tabs and workers (layer 3)
 as pane splits inside their lead's tab, launches each harness binary, waits for
 it to be ready, then injects a bootstrap prompt that joins the agent's comms room.
 
-herdr owns placement/process/status; the per-mission comms server (started here on
-the host, see comms_up/comms_server.py) owns coordination - agents reach it with
-the `comms` CLI over TCP. The orchestrator is layer 1 — the pane you are already
+herdr owns placement/process/status; the per-mission comms server (`comms serve`,
+started here on the host - see comms_up) owns coordination - agents reach it with
+the same `comms` CLI over TCP. The orchestrator is layer 1 — the pane you are already
 in — and is NOT spawned here.
 
 Usage:
-  python3 spawn.py up   <roster.json>          # spawns fleet, prints {role: pane_id} JSON
+  python3 spawn.py up   <roster.json> [teams]  # spawns fleet, prints {role: pane_id} JSON
+                                               # teams = comma list of lead roles; omit = whole roster
   python3 spawn.py poke <feature> <role> [msg] # wake an idle agent (comms nudges don't auto-submit)
   python3 spawn.py down <feature>              # tears down squad rooms + closes the workspace
   python3 spawn.py selfcheck                   # asserts the layer/hierarchy rules
@@ -40,9 +41,6 @@ HARNESSES = {
 
 READY_TIMEOUT_MS = "90000"  # ponytail: cold microVM start; raise if the VM/host gets slower
 SUBMIT_TIMEOUT_MS = "15000"  # how long to wait for an injected prompt to start running
-
-# The mission's comms server lives beside this file; started on the host per mission.
-COMMS_SERVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "comms_server.py")
 
 # Sandbox: run each mission inside one Apple `container` microVM (per-mission
 # granularity). Agents attach as `container exec` processes, so herdr's PTY
@@ -157,6 +155,19 @@ CLAUDE_SEED = (
     "json.dump(s,open(sj,'w'))\n"
 )
 
+# codex's counterpart: --dangerously-bypass-approvals-and-sandbox does NOT skip
+# the /work folder-trust prompt, so a fresh codex hangs on it. Persist the same
+# trust codex would write on "Yes" so its TUI boots straight to ready.
+# Idempotent; harmless for claude-only missions.
+CODEX_SEED = (
+    "import os\n"
+    "p='/root/.codex/config.toml'\n"
+    "os.makedirs('/root/.codex',exist_ok=True)\n"
+    "s=open(p).read() if os.path.exists(p) else ''\n"
+    "if 'projects.\"/work\"' not in s:\n"
+    "    open(p,'w').write(s+'\\n[projects.\"/work\"]\\ntrust_level = \"trusted\"\\n')\n"
+)
+
 
 def mission_up(feature, repo):
     """Start the per-mission microVM: isolated clone at /work, creds at /secrets."""
@@ -173,6 +184,7 @@ def mission_up(feature, repo):
     # acceptance. Pre-answer all three so the TUI boots straight to ready.
     # Idempotent; harmless for codex-only missions.
     container("exec", name, "python3", "-c", CLAUDE_SEED)
+    container("exec", name, "python3", "-c", CODEX_SEED)
     os.makedirs(os.path.dirname(_state_path(feature)), exist_ok=True)
     json.dump({"repo": repo, "workdir": workdir}, open(_state_path(feature), "w"))
     return name
@@ -230,16 +242,21 @@ def _advertise_host():
 
 
 def comms_up(feature):
-    """Start this mission's authoritative comms server on the host and record how to
-    reach it in mission.json. One server per mission; killing it at teardown is the
-    room cleanup. Runs in every mode (the server is a host process, VM or not)."""
+    """Start this mission's authoritative comms server (`comms serve`) on the host and
+    record how to reach it in mission.json. One server per mission; killing it at
+    teardown is the room cleanup. State persists to comms.db beside mission.json, so a
+    server restart mid-mission keeps every room and message. Runs in every mode (the
+    server is a host process, VM or not)."""
     token = secrets.token_hex(16)
-    proc = subprocess.Popen(["python3", COMMS_SERVER, "--token", token],
+    state_dir = os.path.join(MISSIONS_ROOT, feature)
+    os.makedirs(state_dir, exist_ok=True)
+    db = os.path.join(state_dir, "comms.db")
+    proc = subprocess.Popen(["comms", "serve", "--token", token, "--db", db],
                             stdout=subprocess.PIPE, text=True)
     line = proc.stdout.readline()  # server prints {"port": N} first, then serves forever
     if not line:
         proc.kill()
-        sys.exit("comms server failed to start")
+        sys.exit("comms server failed to start (is the `comms` binary on PATH? run provision.sh)")
     port = json.loads(line)["port"]
     url = f"http://{_advertise_host()}:{port}"
     _save_state(feature, comms_url=url, comms_token=token, comms_pid=proc.pid)
@@ -320,20 +337,25 @@ def bootstrap(role, harness, feature, parent):
             f"You are '{role}', a {harness} agent in mission '{feature}', parent orchestrator. "
             f"Your comms identity is preset in $COMMS_AGENT. Run these shell commands now: "
             f"`comms join {mission}`, `comms create-room {squad}`, `comms send {mission} ready`. "
-            f"Then await tasks: poll `comms inbox` and `comms read {mission}`, delegate to your "
-            f"workers in '{squad}' with `comms send {squad} <task>`, and report results up to "
-            f"'{mission}'. Run `comms status done` when finished. Never spawn agents below layer 3."
+            f"Then await tasks by BLOCKING on `comms wait {mission}` — it returns the moment a "
+            f"message arrives, so NEVER write a shell poll loop (no `while`/`for`/`sleep` around "
+            f"comms). For each task: delegate to your workers in '{squad}' with `comms send {squad} "
+            f"<task>`, collect their results (block on `comms wait {squad}`), report up to "
+            f"'{mission}' with `comms send {mission} <result>`, then loop back to `comms wait "
+            f"{mission}`. Run `comms status done` when finished. Never spawn agents below layer 3."
         )
     squad = f"squad-{parent}"  # worker (layer 3)
     return (
         f"You are '{role}', a {harness} agent, parent '{parent}'. Your comms identity is preset "
-        f"in $COMMS_AGENT. Run `comms join {squad}` then `comms send {squad} ready`. Poll "
-        f"`comms inbox` / `comms read {squad}` for tasks, do them, and whenever a task changes "
-        f"files commit them with `wcommit '{role}: <what changed>' <the files you changed>` "
-        f"before you report - you share one clone with other workers, so wcommit serializes the "
-        f"commit and stages only your files (never `git add -A`); only committed work is "
-        f"harvested back to the repo at teardown. Report results with `comms send {squad} "
-        f"<result>`, and run `comms status done`. You are a leaf — do not spawn agents."
+        f"in $COMMS_AGENT. Run `comms join {squad}` then `comms send {squad} ready`. Then BLOCK on "
+        f"`comms wait {squad}` for each task — it returns as soon as a message arrives, so NEVER "
+        f"write a shell poll loop (no `while`/`for`/`sleep` around comms). Do the task, and "
+        f"whenever it changes files commit them with `wcommit '{role}: <what changed>' <the files "
+        f"you changed>` before you report - you share one clone with other workers, so wcommit "
+        f"serializes the commit and stages only your files (never `git add -A`); only committed "
+        f"work is harvested back to the repo at teardown. Report results with `comms send {squad} "
+        f"<result>`, loop back to `comms wait {squad}`, and run `comms status done` when finished. "
+        f"You are a leaf — do not spawn agents."
     )
 
 
@@ -350,7 +372,14 @@ def submit(pane, spec):
         herdr("wait", "output", pane, "--match", spec["working"], "--timeout", SUBMIT_TIMEOUT_MS)
     except subprocess.CalledProcessError:
         herdr("pane", "send-text", pane, "\r")
-        herdr("wait", "output", pane, "--match", spec["working"], "--timeout", SUBMIT_TIMEOUT_MS)
+        try:
+            herdr("wait", "output", pane, "--match", spec["working"], "--timeout", SUBMIT_TIMEOUT_MS)
+        except subprocess.CalledProcessError:
+            # Prompt was almost certainly already submitted: the agent is off running a
+            # foreground command (e.g. a `comms` poll loop), whose TUI footer isn't the
+            # idle "working" marker we wait for. Best-effort confirm, so don't abort the
+            # whole fleet over it. ponytail: if a pane truly swallowed the prompt, poke it.
+            pass
 
 
 def launch(pane, role, harness, model, feature, parent):
@@ -369,11 +398,12 @@ def launch(pane, role, harness, model, feature, parent):
 
 
 def poke(feature, role, message=None):
-    """Wake an idle agent by submitting a prompt straight into its pane.
+    """Wake an agent by submitting a prompt straight into its pane.
 
-    comms delivers no push: an idle agent won't notice a new room message until it
-    next polls `comms inbox`. `herdr pane run` types AND submits a prompt, which wakes
-    the agent so it polls. This is a herdr/PTY-level nudge, not a comms message, so it
+    `comms wait` gives push while an agent is blocked on it, but an agent sitting idle
+    at its prompt (between tasks, or not currently waiting) won't see a new room message
+    on its own. `herdr pane run` types AND submits a prompt, which wakes the agent so it
+    re-checks comms. This is a herdr/PTY-level nudge, not a comms message, so it
     does not put the orchestrator into a worker's room - the hierarchy holds. In sandbox
     mode only the host can reach herdr, so pokes originate from the orchestrator. Use
     whenever a target didn't act on a room message. (herdr is host-pane-local, so this
@@ -389,7 +419,26 @@ def poke(feature, role, message=None):
     print(f"poked {role} ({info['pane']})")
 
 
-def up(roster_path):
+def select_leads(roster, only=None):
+    """Leads (layer 2) to spawn. `only` = comma list of lead roles; None = all.
+
+    A roster is a catalog of teams; a mission usually needs a subset. Selecting a
+    lead brings its workers along (they are gathered by parent in `up`).
+    """
+    leads = [r for r in roster["roles"] if r["parent"] == "orchestrator"]
+    if only is None:
+        return leads
+    want = [t.strip() for t in only.split(",") if t.strip()]
+    names = {l["role"] for l in leads}
+    missing = [t for t in want if t not in names]
+    if missing:
+        raise ValueError(
+            f"unknown team(s): {', '.join(missing)}; "
+            f"available: {', '.join(sorted(names))}")
+    return [l for l in leads if l["role"] in want]
+
+
+def up(roster_path, only=None):
     roster = json.load(open(roster_path))
     validate(roster)
     feature, repo = roster["feature"], roster["repo"]
@@ -408,7 +457,7 @@ def up(roster_path):
     root_pane = ws["result"]["root_pane"]["pane_id"]
 
     panes = {}
-    leads = [r for r in roster["roles"] if r["parent"] == "orchestrator"]
+    leads = select_leads(roster, only)
     for i, lead in enumerate(leads):
         if i == 0:  # reuse the workspace's default tab for the first lead
             herdr("tab", "rename", root_tab, lead["role"])
@@ -469,6 +518,20 @@ def selfcheck():
     ]}
     assert set(validate(ok)) == {"lead", "w1"}
 
+    # team selection: a roster is a catalog; a mission spawns a subset.
+    catalog = {"feature": "t", "repo": "/tmp", "roles": [
+        {"role": "lead-a", "parent": "orchestrator", "harness": "claude", "model": "x"},
+        {"role": "lead-b", "parent": "orchestrator", "harness": "claude", "model": "x"},
+        {"role": "w", "parent": "lead-a", "harness": "claude", "model": "x"},
+    ]}
+    assert [l["role"] for l in select_leads(catalog)] == ["lead-a", "lead-b"]
+    assert [l["role"] for l in select_leads(catalog, "lead-b")] == ["lead-b"]
+    try:
+        select_leads(catalog, "ghost")
+        assert False, "unknown team should raise"
+    except ValueError:
+        pass
+
     def rejects(roster):
         try:
             validate(roster)
@@ -509,8 +572,8 @@ def selfcheck():
 
 if __name__ == "__main__":
     args = sys.argv[1:]
-    if args[:1] == ["up"] and len(args) == 2:
-        up(args[1])
+    if args[:1] == ["up"] and len(args) in (2, 3):
+        up(args[1], args[2] if len(args) == 3 else None)
     elif args[:1] == ["poke"] and 3 <= len(args) <= 4:
         poke(args[1], args[2], args[3] if len(args) == 4 else None)
     elif args[:1] == ["down"] and len(args) == 2:

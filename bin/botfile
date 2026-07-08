@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""botfile — portable agent-memory CLI.
+
+Subcommands:
+  validate       check entities.jsonl, memory index completeness, inline provenance
+  budget-check   assert root instruction files stay under the line budget
+  wire --tool T  point a harness (codex|pi|claude|all) at this repo's AGENTS.md
+
+No third-party deps. The derived vector store / MCP search from the handoff plan
+is deliberately not built: the memory tree is a handful of markdown files and
+grep searches it instantly. Add retrieval when grep actually hurts.
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+MEM = REPO / ".botfile" / "memory"
+ENTITIES = REPO / ".botfile" / "entities" / "entities.jsonl"
+
+# ponytail: single budget value, so it lives here, not in a yaml parser + dep.
+ROOT_MAX_LINES = 200
+ROOT_FILES = ["AGENTS.md", "CLAUDE.md"]
+
+ENTITY_FIELDS = ["canonical_id", "name", "type", "aliases", "source", "date"]
+DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+SOURCE_RE = re.compile(r"<source:[^>]*\d{4}-\d{2}-\d{2}[^>]*>")
+
+
+def provenance_gaps(text):
+    """Line numbers of top-level `- ` bullets lacking <source: …, date>.
+    A bullet may wrap across indented continuation lines; check the whole block.
+    """
+    gaps, start, block = [], None, ""
+    def close():
+        if start is not None and not SOURCE_RE.search(block):
+            gaps.append(start)
+    for n, line in enumerate(text.splitlines(), 1):
+        if line.startswith("- "):
+            close()
+            start, block = n, line
+        elif start is not None and (line.startswith(" ") or line.startswith("\t")):
+            block += " " + line
+        else:
+            close()
+            start, block = None, ""
+    close()
+    return gaps
+
+
+def fail(errs):
+    for e in errs:
+        print(f"  FAIL: {e}", file=sys.stderr)
+    return 1
+
+
+def validate():
+    errs = []
+
+    # 1. entities.jsonl — valid JSONL, required fields, unique canonical_id.
+    seen = set()
+    for n, line in enumerate(ENTITIES.read_text().splitlines(), 1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError as e:
+            errs.append(f"entities.jsonl:{n} invalid JSON: {e}")
+            continue
+        for f in ENTITY_FIELDS:
+            if f not in obj:
+                errs.append(f"entities.jsonl:{n} missing field '{f}'")
+        if not isinstance(obj.get("aliases"), list):
+            errs.append(f"entities.jsonl:{n} 'aliases' must be a list")
+        cid = obj.get("canonical_id")
+        if cid in seen:
+            errs.append(f"entities.jsonl:{n} duplicate canonical_id '{cid}'")
+        seen.add(cid)
+
+    # 2. index.md lists exactly the memory files that exist.
+    index = MEM / "index.md"
+    indexed = {
+        str((index.parent / m).resolve())
+        for m in re.findall(r"\(([^)]+\.md)\)", index.read_text())
+    }
+    actual = {
+        str(p.resolve())
+        for p in MEM.rglob("*.md")
+        if p.name != "index.md"
+    }
+    for missing in sorted(actual - indexed):
+        errs.append(f"memory file not listed in index.md: {os.path.relpath(missing, REPO)}")
+    for dangling in sorted(indexed - actual):
+        errs.append(f"index.md links a missing file: {os.path.relpath(dangling, REPO)}")
+
+    # 3. Every top-level fact bullet carries inline <source: …, date> provenance.
+    for p in sorted(MEM.rglob("*.md")):
+        if p.name == "index.md":
+            continue
+        for ln in provenance_gaps(p.read_text()):
+            errs.append(f"{os.path.relpath(p, REPO)}:{ln} "
+                        f"fact bullet missing <source: …, YYYY-MM-DD>")
+
+    if errs:
+        return fail(errs)
+    print("validate ok")
+    return 0
+
+
+def budget_check():
+    errs = []
+    for name in ROOT_FILES:
+        f = REPO / name
+        lines = len(f.read_text().splitlines())
+        status = "ok" if lines <= ROOT_MAX_LINES else "OVER"
+        print(f"  {name}: {lines}/{ROOT_MAX_LINES} lines [{status}]")
+        if lines > ROOT_MAX_LINES:
+            errs.append(f"{name} is {lines} lines, over the {ROOT_MAX_LINES}-line budget")
+    if errs:
+        return fail(errs)
+    print("budget-check ok")
+    return 0
+
+
+def wire(tool):
+    agents = REPO / "AGENTS.md"
+    home = Path.home()
+
+    def link(target):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.is_symlink() or target.exists():
+            target.unlink()
+        target.symlink_to(agents)
+        print(f"  linked {target} -> {agents}")
+
+    def do(t):
+        if t == "codex":
+            link(home / ".codex" / "AGENTS.md")
+        elif t == "pi":
+            link(home / ".pi" / "agent" / "AGENTS.md")
+        elif t == "claude":
+            # Claude walks up from cwd, so the global importer needs an absolute
+            # path to the repo, not a bare @AGENTS.md.
+            dest = home / ".claude" / "CLAUDE.md"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            content = f"@{agents}\n"
+            if dest.exists() and dest.read_text() != content:
+                bak = dest.with_suffix(".md.bak")
+                bak.write_text(dest.read_text())
+                print(f"  backed up existing {dest} -> {bak}")
+            dest.write_text(content)
+            print(f"  wrote {dest} importing {agents}")
+        else:
+            print(f"unknown tool: {t}", file=sys.stderr)
+            return 1
+        return 0
+
+    tools = ["codex", "pi", "claude"] if tool == "all" else [tool]
+    rc = 0
+    for t in tools:
+        rc |= do(t)
+    return rc
+
+
+def selfcheck():
+    ok = "- fact <source: spec, 2026-07-07>"
+    wrapped = "- fact that wraps\n  onto a line <source: spec, 2026-07-07>"
+    bad = "- fact with no provenance"
+    bad_date = "- fact <source: spec>"
+    assert provenance_gaps(ok) == [], "single-line good bullet flagged"
+    assert provenance_gaps(wrapped) == [], "wrapped good bullet flagged"
+    assert provenance_gaps(bad) == [1], "missing provenance not caught"
+    assert provenance_gaps(bad_date) == [1], "missing date not caught"
+    assert provenance_gaps(bad + "\n" + ok) == [1], "wrong bullet flagged in mix"
+    print("selfcheck ok")
+    return 0
+
+
+def main(argv):
+    if not argv:
+        print(__doc__)
+        return 1
+    cmd = argv[0]
+    if cmd == "validate":
+        return validate()
+    if cmd == "budget-check":
+        return budget_check()
+    if cmd == "selfcheck":
+        return selfcheck()
+    if cmd == "wire":
+        tool = None
+        for i, a in enumerate(argv[1:]):
+            if a == "--tool" and i + 2 <= len(argv[1:]):
+                tool = argv[1:][i + 1]
+        if tool not in ("codex", "pi", "claude", "all"):
+            print("usage: botfile wire --tool {codex|pi|claude|all}", file=sys.stderr)
+            return 1
+        return wire(tool)
+    print(f"unknown command: {cmd}\n{__doc__}", file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

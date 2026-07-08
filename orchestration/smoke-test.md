@@ -12,8 +12,8 @@ Run the orchestration smoke test with `orchestration/smoke.roster.json` (feature
 `smoke`: `lead-a` + `worker-a-1`, both claude/sonnet). Do each step and report
 pass/fail:
 
-1. **Self-check the server.** `python3 orchestration/comms_server.py --demo` prints
-   `demo ok`. **PASS** on exit 0.
+1. **Self-check the server.** `comms --selfcheck` prints `comms selfcheck ok`
+   (or, from source, `cd comms && cargo test`). **PASS** on exit 0.
 2. **Spawn.** `python3 orchestration/spawn.py up orchestration/smoke.roster.json`.
    Expect a printed `{role: pane_id}` map, and `mission.json`
    (`/tmp/botfile-missions/smoke/mission.json`) to carry `comms_url`,

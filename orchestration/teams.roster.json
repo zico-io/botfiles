@@ -1,0 +1,26 @@
+{
+  "feature": "teams",
+  "repo": "/Users/percules/.botfiles",
+  "roles": [
+    {"role": "lead-frontend", "parent": "orchestrator", "harness": "claude", "model": "opus"},
+    {"role": "lead-backend",  "parent": "orchestrator", "harness": "claude", "model": "opus"},
+    {"role": "lead-sre",      "parent": "orchestrator", "harness": "codex",  "model": "gpt-5.5"},
+    {"role": "lead-docs",     "parent": "orchestrator", "harness": "claude", "model": "sonnet"},
+    {"role": "lead-qa",       "parent": "orchestrator", "harness": "claude", "model": "opus"},
+
+    {"role": "worker-fe-1",   "parent": "lead-frontend", "harness": "claude", "model": "sonnet"},
+    {"role": "worker-fe-2",   "parent": "lead-frontend", "harness": "codex",  "model": "gpt-5.5"},
+
+    {"role": "worker-be-1",   "parent": "lead-backend",  "harness": "pi",     "model": "mlx-main/mlx-community/Ornith-1.0-35B-4bit"},
+    {"role": "worker-be-2",   "parent": "lead-backend",  "harness": "pi",     "model": "mlx-fast/mlx-community/Ornith-1.0-9B-4bit"},
+
+    {"role": "worker-sre-1",  "parent": "lead-sre",      "harness": "codex",  "model": "gpt-5.5"},
+    {"role": "worker-sre-2",  "parent": "lead-sre",      "harness": "claude", "model": "sonnet"},
+
+    {"role": "worker-docs-1", "parent": "lead-docs",     "harness": "claude", "model": "sonnet"},
+    {"role": "worker-docs-2", "parent": "lead-docs",     "harness": "claude", "model": "haiku"},
+
+    {"role": "worker-qa-1",   "parent": "lead-qa",       "harness": "claude", "model": "sonnet"},
+    {"role": "worker-qa-2",   "parent": "lead-qa",       "harness": "claude", "model": "sonnet"}
+  ]
+}

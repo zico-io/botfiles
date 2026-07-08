@@ -1,0 +1,15 @@
+name: botfile
+on:
+  push:
+  pull_request:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: selfcheck
+        run: ./bin/botfile selfcheck
+      - name: validate
+        run: ./bin/botfile validate
+      - name: budget-check
+        run: ./bin/botfile budget-check

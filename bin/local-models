@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# local-models — bring the local MLX inference pair up/down for the pi harness.
+#
+# Serves two OpenAI-compatible endpoints that orchestration/pi-models.json points
+# at (mlx-main :8000, mlx-fast :8001). On a 36GB M-series machine the pair is
+# ~26GB of weights resident at once, so bump the GPU wired limit first (noted below).
+#
+# We serve with mlx_lm.server, NOT mlx_vlm.server: only mlx-lm exposes the
+# OpenAI /v1/chat/completions route pi's `openai-completions` provider needs.
+# mlx-lm loads these VLM repos as text models (it drops vision_config) - exactly
+# what we want, they're used as coders not for images.
+#
+# ponytail: the model->port map lives twice - here and in pi-models.json. Two
+# lines each; keep them in sync.
+set -euo pipefail
+
+MLX_LM_VERSION="0.31.3"       # pin: latest mlx-lm at time of wiring (2026-07)
+TRANSFORMERS_VERSION="5.0.0"  # the ONLY transformers that both imports in mlx-lm 0.31
+                              # AND ships TokenizersBackend (the Ornith tokenizer class):
+                              # 5.13 crashes mlx-lm's register() at import; 4.x lacks the class.
+RUN="${TMPDIR:-/tmp}/botfile-local-models"
+VENV="$HOME/.cache/botfile/mlx-venv"   # own venv: system python is often too old (mlx-vlm needs 3.11+)
+PY="$VENV/bin/python"
+mkdir -p "$RUN"
+
+# role  port  model-repo   (ports must match orchestration/pi-models.json)
+MODELS=(
+  "main 8000 mlx-community/Ornith-1.0-35B-4bit"
+  "fast 8001 mlx-community/Ornith-1.0-9B-4bit"
+)
+
+# A Python >=3.11 to build the venv from. Prefer an installed one; else brew it.
+find_python() {
+  for p in python3.13 python3.12 python3.11; do
+    command -v "$p" >/dev/null 2>&1 && { echo "$p"; return; }
+  done
+  if command -v brew >/dev/null 2>&1; then
+    brew list python@3.12 >/dev/null 2>&1 || brew install python@3.12 >&2
+    echo "$(brew --prefix)/bin/python3.12"; return
+  fi
+  echo ""
+}
+
+ensure_deps() {
+  if [ ! -x "$PY" ]; then
+    base=$(find_python)
+    [ -n "$base" ] || { echo "need Python >=3.11 (mlx-lm requires scipy>=1.15); brew install python@3.12" >&2; exit 1; }
+    "$base" -m venv "$VENV"
+    "$PY" -m pip install -q --upgrade pip
+  fi
+  # Install mlx-lm + the one compatible transformers together. Gate so it only
+  # runs when the exact pins aren't already in place.
+  if ! "$PY" -c "import mlx_lm, transformers as t, sys; sys.exit(t.__version__!='${TRANSFORMERS_VERSION}')" 2>/dev/null; then
+    "$PY" -m pip install -q "mlx-lm==${MLX_LM_VERSION}" "transformers==${TRANSFORMERS_VERSION}"
+  fi
+}
+
+check_vram() {
+  local limit
+  limit=$(sysctl -n iogpu.wired_limit_mb 2>/dev/null || echo 0)
+  if [ "$limit" -lt 30720 ]; then
+    echo "note: GPU wired limit is ${limit}MB - both models need headroom for the KV cache."
+    echo "      run once per boot:  sudo sysctl iogpu.wired_limit_mb=30720"
+  fi
+}
+
+up() {
+  ensure_deps
+  check_vram
+  for m in "${MODELS[@]}"; do
+    read -r role port repo <<<"$m"
+    pidf="$RUN/$role.pid"
+    if [ -f "$pidf" ] && kill -0 "$(cat "$pidf")" 2>/dev/null; then
+      echo "$role already up (pid $(cat "$pidf"))"; continue
+    fi
+    "$PY" -m mlx_lm.server --model "$repo" --port "$port" >"$RUN/$role.log" 2>&1 &
+    echo $! >"$pidf"
+    echo "$role up: $repo on :$port (pid $!, log $RUN/$role.log)"
+  done
+}
+
+down() {
+  for m in "${MODELS[@]}"; do
+    read -r role port repo <<<"$m"
+    pidf="$RUN/$role.pid"
+    [ -f "$pidf" ] || continue
+    kill "$(cat "$pidf")" 2>/dev/null && echo "$role down" || true
+    rm -f "$pidf"
+  done
+}
+
+status() {
+  for m in "${MODELS[@]}"; do
+    read -r role port repo <<<"$m"
+    pidf="$RUN/$role.pid"
+    if [ -f "$pidf" ] && kill -0 "$(cat "$pidf")" 2>/dev/null; then
+      echo "$role: up (pid $(cat "$pidf"), :$port, $repo)"
+    else
+      echo "$role: down ($repo)"
+    fi
+  done
+}
+
+case "${1:-}" in
+  up)     up ;;
+  down)   down ;;
+  status) status ;;
+  *) echo "usage: local-models {up|down|status}" >&2; exit 1 ;;
+esac

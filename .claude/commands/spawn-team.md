@@ -9,8 +9,15 @@ if unset, stop and say you are not inside herdr.
 
 Read the roster to learn its `feature`. Then:
 
-1. **Spawn the fleet.** Run:
-   `python3 orchestration/spawn.py up $ARGUMENTS`
+0. **Pick the teams.** The roster is a *catalog* — each layer-2 lead is one team,
+   and its workers come with it. From the mission goal, decide the **minimum** set
+   of teams you actually need; do not spawn teams the mission won't use. If the
+   goal is ambiguous, ask the human which teams; only when it genuinely spans the
+   whole fleet do you spawn all. Pass the chosen leads to `up` (comma-separated);
+   omit the argument to spawn the whole roster.
+
+1. **Spawn the fleet.** Run (append your chosen teams, or omit for all):
+   `python3 orchestration/spawn.py up $ARGUMENTS <team1,team2>`
    It starts the mission's **comms server** on the host, creates the
    `mission-<feature>` herdr workspace, launches every lead (layer 2, one tab
    each) and worker (layer 3, split into its lead's tab), and injects each
