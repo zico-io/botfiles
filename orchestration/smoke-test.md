@@ -51,6 +51,13 @@ pass/fail:
    `git show mission-smoke:smoke-ok.txt` prints `OK`. Clean up the harvest branch:
    `git branch -D mission-smoke`.
 
+## Comms TUI
+
+The `comms tui` dashboard has its own self-contained smoke test (spawns its own
+server, no herdr needed): `python3 comms/smoke-tui.py`. It renders live data,
+flips CONNECTED -> DISCONNECTED on server loss, recovers, and quits cleanly.
+**PASS** on exit 0. Run it after touching `comms/src/tui/`.
+
 If a pane's agent never reaches ready, `herdr pane read <pane> --source recent`
 to see why. If the ready-match is wrong, tune `HARNESSES[...]["ready"]` in
 `orchestration/spawn.py`. If an agent sits idle after a task is posted, that is
