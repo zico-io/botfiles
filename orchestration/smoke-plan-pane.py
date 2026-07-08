@@ -143,6 +143,33 @@ def check_install_keybind_respects_existing_cp():
             plan_pane.HELIX_CONFIG = orig
 
 
+def check_install_keybind_refreshes_stale():
+    # A first install can embed an absolute shim path from a work clone that later gets
+    # torn down. Re-running from the real checkout must REPLACE the stale managed block,
+    # not skip it just because the MARKER is present. Simulate the two checkouts by
+    # swapping KEY_LINE (which embeds the shim path) across two installs.
+    with tempfile.TemporaryDirectory() as d:
+        cfg = os.path.join(d, "config.toml")
+        orig_cfg, orig_key = plan_pane.HELIX_CONFIG, plan_pane.KEY_LINE
+        plan_pane.HELIX_CONFIG = cfg
+        try:
+            stale = 'C-p = ":pipe-to python3 /stale/work-clone/plan_pane_shim.py %{buffer_name} %{selection_line_start} %{selection_line_end}"'
+            plan_pane.KEY_LINE = stale
+            plan_pane.install_keybind()
+            has_stale = stale in open(cfg).read()
+
+            fresh = 'C-p = ":pipe-to python3 /real/botfiles/plan_pane_shim.py %{buffer_name} %{selection_line_start} %{selection_line_end}"'
+            plan_pane.KEY_LINE = fresh
+            plan_pane.install_keybind()  # marker present but line differs -> refresh in place
+            after = open(cfg).read()
+            refreshed = fresh in after and stale not in after
+            # no duplicate marker and no duplicate C-p key (a dup key breaks hx)
+            single = after.count(plan_pane.MARKER) == 1 and after.count("C-p =") == 1
+            return has_stale and refreshed and single
+        finally:
+            plan_pane.HELIX_CONFIG, plan_pane.KEY_LINE = orig_cfg, orig_key
+
+
 def check_selection_claim_is_atomic_rename():
     # read_and_clear_selection() must claim via rename (not read-then-delete), so a
     # write racing the read can't be silently lost. Simulate the race directly: a
@@ -195,6 +222,7 @@ def main():
         ("install_keybind: idempotent re-run", check_install_keybind_idempotent()),
         ("install_keybind: merges into existing [keys.normal]", check_install_keybind_merges_existing_table()),
         ("install_keybind: refuses to clobber an existing C-p", check_install_keybind_respects_existing_cp()),
+        ("install_keybind: refreshes a stale managed shim path", check_install_keybind_refreshes_stale()),
         ("selection: claim-by-rename survives a racing write", check_selection_claim_is_atomic_rename()),
         ("shim + selection: round trip, then clears", check_shim_round_trip()),
     ]

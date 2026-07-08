@@ -64,21 +64,20 @@ def open_editor(path):
     """Split a pane off the caller's own pane (no focus stolen) and launch hx on `path`
     in it. Returns the new pane id.
 
-    No anchor is passed (unlike spawn.py, which always splits an explicitly-created
-    pane it doesn't own) - this call runs interactively from inside the orchestrator's
-    own herdr pane, so a bare `pane split` is assumed to default to splitting the
-    caller's active pane. HOST-E2E ASSUMPTION, unverified in this sandbox (no herdr
-    socket) - confirm live."""
-    split = herdr("pane", "split", "--direction", "right", "--no-focus")
+    A bare `pane split` does NOT default to the caller's pane - on the host it splits
+    into an unrelated workspace (verified in host E2E). So we resolve the caller's own
+    pane first with `pane current` and anchor the split to it, mirroring spawn.py:580
+    which always splits an explicit anchor pane."""
+    cur = herdr("pane", "current")["result"]["pane"]["pane_id"]
+    split = herdr("pane", "split", cur, "--direction", "right", "--no-focus")
     pane = split["result"]["pane"]["pane_id"]
     herdr("pane", "run", pane, f"hx {path}")
     return pane
 
 
 def close_editor(pane_id):
-    """Close the editor pane opened by open_editor(). `pane close` is a best-guess
-    herdr verb (by analogy with spawn.py's `workspace close`/`tab create`/`pane
-    split`/`pane run`) - unverified in this sandbox (no herdr socket), confirm live."""
+    """Close the editor pane opened by open_editor(). `herdr pane close <pane_id>` is
+    the exact verb (confirmed in host E2E)."""
     herdr("pane", "close", pane_id)
 
 
@@ -164,21 +163,41 @@ def cmd_selection():
 
 
 _CP_BOUND_RE = re.compile(r"(?m)^\s*C-p\s*=")
+# Matches our managed block: the MARKER line plus the C-p line immediately below it.
+_MANAGED_BLOCK_RE = re.compile(r"(?m)^" + re.escape(MARKER) + r"\n[ \t]*C-p[ \t]*=.*$")
 
 
 def install_keybind():
-    """Idempotently append the push-selection keybind to the human's Helix config.
+    """Idempotently install the push-selection keybind in the human's Helix config.
     Runs on the HOST (not in the sandbox) since it edits ~/.config/helix - this repo's
     sandboxed workers can only exercise this against a temp file, see
-    orchestration/smoke-plan-pane.py. Guarded by MARKER so re-running is a no-op.
+    orchestration/smoke-plan-pane.py.
 
-    Also guards against clobbering a user's own C-p binding: inserting a second
-    `C-p = ...` line into the same [keys.normal] table would be a TOML "duplicate
-    key" error that breaks their config on next hx launch, so if C-p is already
-    bound (and it isn't ours) this warns and does nothing instead of writing."""
+    Re-run behaviour, keyed off MARKER:
+      - MARKER present and its managed C-p line already matches what we'd write -> no-op.
+      - MARKER present but the managed line DIFFERS (e.g. a stale absolute shim path
+        left over from a since-deleted work clone) -> replace the managed block in place
+        so a later run from the real checkout refreshes it. Idempotency alone would
+        wrongly keep the dead path.
+      - No MARKER but a NON-managed `C-p = ...` already exists in [keys.normal] -> warn
+        and do nothing, since a second `C-p =` in the same table is a TOML duplicate-key
+        error that breaks hx on next launch. We never clobber the user's own binding."""
     text = open(HELIX_CONFIG).read() if os.path.exists(HELIX_CONFIG) else ""
+    managed = MARKER + "\n" + KEY_LINE
     if MARKER in text:
-        print(f"keybind already installed in {HELIX_CONFIG}")
+        m = _MANAGED_BLOCK_RE.search(text)
+        if m and m.group(0) == managed:
+            print(f"keybind already installed in {HELIX_CONFIG}")
+            return
+        if m:
+            text = text[:m.start()] + managed + text[m.end():]
+            with open(HELIX_CONFIG, "w") as f:
+                f.write(text)
+            print(f"refreshed keybind in {HELIX_CONFIG}")
+            return
+        # MARKER present but no managed C-p line below it (hand-edited); leave it alone.
+        print(f"MARKER found but no managed C-p line in {HELIX_CONFIG} - looks hand-edited, "
+              f"not touching it; remove the marker line to reinstall")
         return
     if "[keys.normal]" in text:
         start = text.index("[keys.normal]") + len("[keys.normal]")
