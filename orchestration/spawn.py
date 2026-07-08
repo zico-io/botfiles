@@ -10,9 +10,10 @@ herdr owns placement/process/status; agent-comms owns coordination. The
 orchestrator is layer 1 — the pane you are already in — and is NOT spawned here.
 
 Usage:
-  python3 spawn.py up   <roster.json>   # spawns fleet, prints {role: pane_id} JSON
-  python3 spawn.py down <feature>       # closes the mission-<feature> workspace
-  python3 spawn.py selfcheck            # asserts the layer/hierarchy rules
+  python3 spawn.py up   <roster.json>          # spawns fleet, prints {role: pane_id} JSON
+  python3 spawn.py poke <feature> <role> [msg] # wake an idle agent (comms nudges don't auto-submit)
+  python3 spawn.py down <feature>              # tears down squad rooms + closes the workspace
+  python3 spawn.py selfcheck                   # asserts the layer/hierarchy rules
 
 See orchestration/roster.example.json and .claude/commands/spawn-team.md.
 """
@@ -21,6 +22,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 # Per-harness launch template + a startup substring herdr waits for before we
 # inject the bootstrap prompt. {model}/{role} are filled per role.
@@ -34,6 +36,7 @@ HARNESSES = {
 
 READY_TIMEOUT_MS = "60000"
 SUBMIT_TIMEOUT_MS = "15000"  # how long to wait for an injected prompt to start running
+SQUAD_CLEANUP_WAIT_S = 8     # grace for leads to destroy their own squad room at teardown
 
 # Sandbox: run each mission inside one Apple `container` microVM (per-mission
 # granularity). Agents attach as `container exec` processes, so herdr's PTY
@@ -76,6 +79,22 @@ def mission_workdir(feature, repo):
 
 def _state_path(feature):
     return os.path.join(MISSIONS_ROOT, feature, "mission.json")
+
+
+def _load_state(feature):
+    try:
+        return json.load(open(_state_path(feature)))
+    except FileNotFoundError:
+        return {}
+
+
+def _save_state(feature, **kw):
+    """Merge keys into the per-mission state file (created if missing)."""
+    p = _state_path(feature)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    st = _load_state(feature)
+    st.update(kw)
+    json.dump(st, open(p, "w"))
 
 
 def harvest(feature, repo, workdir):
@@ -217,21 +236,50 @@ def bootstrap(role, harness, feature, parent):
     )
 
 
+def submit(pane, spec):
+    r"""Confirm an injected prompt actually started running; resend the submit key if not.
+
+    A freshly-split or just-woken pane can swallow the submit key, leaving the prompt
+    typed but unsent. NOTE: Claude's TUI ignores a bare `send-keys Enter`, and a `\n`
+    (line feed) only submits short inputs; the reliable submit is a carriage return
+    (`\r`) - the actual Enter key. Sending it to an already-running (empty) prompt is a
+    harmless no-op, so this is safe to always run.
+    """
+    try:
+        herdr("wait", "output", pane, "--match", spec["working"], "--timeout", SUBMIT_TIMEOUT_MS)
+    except subprocess.CalledProcessError:
+        herdr("pane", "send-text", pane, "\r")
+        herdr("wait", "output", pane, "--match", spec["working"], "--timeout", SUBMIT_TIMEOUT_MS)
+
+
 def launch(pane, role, harness, model, feature, parent):
     """Run the harness in `pane`, wait for it to be ready, inject the bootstrap."""
     spec = HARNESSES[harness]
     herdr("pane", "run", pane, sandbox_wrap(spec["cmd"].format(model=model, role=role), feature))
     herdr("wait", "output", pane, "--match", spec["ready"], "--timeout", READY_TIMEOUT_MS)
     herdr("pane", "run", pane, bootstrap(role, harness, feature, parent))
-    # A freshly-split pane can swallow the submit newline before its TUI is ready,
-    # leaving the prompt typed but unsent. Confirm the agent started; if not, press
-    # Enter and re-check. An extra Enter on an already-submitted (empty) prompt is a
-    # harmless no-op, so this is safe to run for every agent.
-    try:
-        herdr("wait", "output", pane, "--match", spec["working"], "--timeout", SUBMIT_TIMEOUT_MS)
-    except subprocess.CalledProcessError:
-        herdr("pane", "send-keys", pane, "Enter")
-        herdr("wait", "output", pane, "--match", spec["working"], "--timeout", SUBMIT_TIMEOUT_MS)
+    submit(pane, spec)
+
+
+def poke(feature, role, message=None):
+    """Wake an idle agent by submitting a prompt straight into its pane.
+
+    agent-comms room messages are typed into an idle Claude agent's input but NOT
+    submitted (the bridge never sends the newline), so a delegated agent can sit idle
+    forever with the nudge unsent. `herdr pane run` types AND submits, which wakes it.
+    This is a herdr/PTY-level nudge, not an agent-comms message, so it does not put the
+    orchestrator into a worker's room - the hierarchy holds. In sandbox mode only the
+    host can reach herdr, so pokes originate from the orchestrator. Use whenever a
+    target didn't act on a room message.
+    """
+    st = _load_state(feature)
+    info = (st.get("roles") or {}).get(role)
+    if not info:
+        sys.exit(f"no role {role!r} in fleet {feature!r} (run `up` first)")
+    msg = message or "Check your agent-comms rooms for new messages and act on them now."
+    herdr("pane", "run", info["pane"], msg)
+    submit(info["pane"], HARNESSES[info["harness"]])
+    print(f"poked {role} ({info['pane']})")
 
 
 COORDINATOR_PORT = "19876"  # agent-comms mesh: first bridge to bind it coordinates.
@@ -289,11 +337,35 @@ def up(roster_path):
             panes[w["role"]] = wp
             anchor = wp
 
+    # Record role -> pane so `poke`/`down` can reach agents after `up` returns.
+    roles = {r["role"]: {"pane": panes[r["role"]], "parent": r["parent"], "harness": r["harness"]}
+             for r in roster["roles"] if r["role"] in panes}
+    _save_state(feature, roles=roles)
     print(json.dumps(panes))
 
 
 def down(feature):
     label = f"mission-{feature}"
+    # squad-<lead> rooms are owned by the lead, not the orchestrator, and a dead pane
+    # lingers as an offline member keeping the room alive - so nobody can clean them up
+    # after the fact. Poke each lead to destroy its own squad while it is still running.
+    # Best-effort: a crashed/unreachable lead just leaves its squad orphaned (no worse
+    # than before). The mission-<feature> room is orchestrator-owned; the orchestrator
+    # destroys it via agent-comms after `down` returns.
+    roles = _load_state(feature).get("roles", {})
+    poked = False
+    for role, info in roles.items():
+        if info.get("parent") == "orchestrator":
+            try:
+                poke(feature, role,
+                     f"Teardown: use the agent-comms tool to destroy_room 'squad-{role}', "
+                     f"then leave every room and stop.")
+                poked = True
+            except subprocess.CalledProcessError as e:
+                print(f"warn: lead {role!r} unreachable; squad-{role} may linger ({e})", file=sys.stderr)
+    if poked:
+        time.sleep(SQUAD_CLEANUP_WAIT_S)  # ponytail: fixed grace for leads to run destroy_room
+
     closed = None
     for w in herdr("workspace", "list")["result"]["workspaces"]:
         if w.get("label") == label:
@@ -301,7 +373,9 @@ def down(feature):
             closed = w["workspace_id"]
             break
     if SANDBOX:
-        mission_down(feature)  # stop the microVM + wipe its secrets, always
+        mission_down(feature)  # stop the microVM + wipe its secrets (also clears state)
+    else:
+        shutil.rmtree(os.path.join(MISSIONS_ROOT, feature), ignore_errors=True)  # drop role->pane state
     if closed:
         print(f"closed {label} ({closed})")
     else:
@@ -351,6 +425,8 @@ if __name__ == "__main__":
     args = sys.argv[1:]
     if args[:1] == ["up"] and len(args) == 2:
         up(args[1])
+    elif args[:1] == ["poke"] and 3 <= len(args) <= 4:
+        poke(args[1], args[2], args[3] if len(args) == 4 else None)
     elif args[:1] == ["down"] and len(args) == 2:
         down(args[1])
     elif args == ["selfcheck"]:
