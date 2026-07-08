@@ -399,7 +399,7 @@ def validate(roster):
     return roles
 
 
-def bootstrap(role, harness, feature, parent):
+def bootstrap(role, harness, feature, parent, has_brief=False):
     """First-turn prompt: join the right comms room via the `comms` CLI.
 
     Identity is preset in $COMMS_AGENT (injected per exec), so the server upserts
@@ -408,10 +408,18 @@ def bootstrap(role, harness, feature, parent):
     mission = f"mission-{feature}"
     if parent == "orchestrator":  # lead (layer 2)
         squad = f"squad-{role}"
+        # The brief is posted to the mission room by `up` before leads join, so pull it
+        # with `read --since 0` (full history) and relay it into the squad for workers.
+        brief = (
+            f"After joining, run `comms read {mission} --since 0` to pull the mission brief "
+            f"(posted before you joined) - it is your guiding scope; then relay it to your "
+            f"workers with `comms send {squad} <brief>`. "
+        ) if has_brief else ""
         return (
             f"You are '{role}', a {harness} agent in mission '{feature}', parent orchestrator. "
             f"Your comms identity is preset in $COMMS_AGENT. Run these shell commands now: "
             f"`comms join {mission}`, `comms create-room {squad}`, `comms send {mission} ready`. "
+            + brief +
             f"Then await tasks by BLOCKING on `comms wait {mission}` — it returns the moment a "
             f"message arrives, so NEVER write a shell poll loop (no `while`/`for`/`sleep` around "
             f"comms). For each task: delegate to your workers in '{squad}' with `comms send {squad} "
@@ -457,7 +465,7 @@ def submit(pane, spec):
             pass
 
 
-def launch(pane, role, harness, model, feature, parent):
+def launch(pane, role, harness, model, feature, parent, has_brief=False):
     """Run the harness in `pane`, wait for it to be ready, inject the bootstrap.
 
     Each agent's shell carries its comms coordinates + identity so the baked-in
@@ -468,7 +476,7 @@ def launch(pane, role, harness, model, feature, parent):
     env = {"COMMS_URL": st["comms_url"], "COMMS_TOKEN": st["comms_token"], "COMMS_AGENT": role}
     herdr("pane", "run", pane, sandbox_wrap(spec["cmd"].format(model=model, role=role), feature, env))
     herdr("wait", "output", pane, "--match", spec["ready"], "--timeout", READY_TIMEOUT_MS)
-    herdr("pane", "run", pane, bootstrap(role, harness, feature, parent))
+    herdr("pane", "run", pane, bootstrap(role, harness, feature, parent, has_brief))
     submit(pane, spec)
 
 
@@ -543,6 +551,14 @@ def up(roster_path, only=None):
         # without a manual join step.
         comms_post(feature, "orchestrator", "create-room", name=f"mission-{feature}")
 
+        # If `/scope-mission` wrote a brief next to the roster, seed it as the mission
+        # room's first message so every lead reads it (and relays it) before working.
+        brief_path = os.path.join(os.path.dirname(roster_path), f"{feature}.brief.md")
+        has_brief = os.path.isfile(brief_path)
+        if has_brief:
+            comms_post(feature, "orchestrator", "send",
+                       room=f"mission-{feature}", text=open(brief_path).read())
+
         ws = herdr("workspace", "create", "--cwd", repo, "--label", f"mission-{feature}", "--no-focus")
         workspace_id = ws["result"]["workspace"]["workspace_id"]
         root_tab = ws["result"]["tab"]["tab_id"]
@@ -556,7 +572,7 @@ def up(roster_path, only=None):
             else:
                 tab = herdr("tab", "create", "--workspace", workspace_id, "--label", lead["role"])
                 pane = tab["result"]["root_pane"]["pane_id"]
-            launch(pane, lead["role"], lead["harness"], lead["model"], feature, "orchestrator")
+            launch(pane, lead["role"], lead["harness"], lead["model"], feature, "orchestrator", has_brief)
             panes[lead["role"]] = pane
 
             anchor = pane
@@ -705,6 +721,10 @@ def selfcheck():
     assert "comms join mission-f" in bootstrap("lead", "claude", "f", "orchestrator")
     wb = bootstrap("w1", "claude", "f", "lead")
     assert "comms join squad-lead" in wb and "wcommit" in wb
+    # brief wiring: a lead reads+relays the brief only when one was posted
+    assert "read mission-f --since 0" not in bootstrap("lead", "claude", "f", "orchestrator")
+    lb = bootstrap("lead", "claude", "f", "orchestrator", has_brief=True)
+    assert "read mission-f --since 0" in lb and "comms send squad-lead <brief>" in lb
     print("selfcheck ok")
 
 

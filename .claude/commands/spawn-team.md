@@ -9,6 +9,11 @@ if unset, stop and say you are not inside herdr.
 
 Read the roster to learn its `feature`. Then:
 
+If the mission goal is ambiguous, stop and run `/scope-mission <feature>` first - it
+interviews the human, writes `orchestration/<feature>.brief.md`, and drafts this roster.
+`up` then auto-posts that brief into the `mission-<feature>` room as its first message
+(each lead reads and relays it), so no manual brief step is needed here.
+
 0. **Pick the teams.** The roster is a *catalog* — each layer-2 lead is one team,
    and its workers come with it. From the mission goal, decide the **minimum** set
    of teams you actually need; do not spawn teams the mission won't use. If the
