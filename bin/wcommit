@@ -1,0 +1,26 @@
+#!/bin/sh
+# wcommit — serialized, path-scoped git commit for mission workers.
+#
+# Every agent in a mission shares ONE /work clone, so concurrent `git add -A` +
+# `git commit` race on .git/index.lock (one crashes) and `-A` cross-stages each
+# other's in-flight files (a commit captures half-written work from a sibling).
+# wcommit takes an flock so commits run one at a time, and stages ONLY the paths
+# you name. Use it instead of raw `git commit`:
+#
+#   wcommit "<message>" <path> [<path>...]
+#
+# ponytail: one global per-clone lock - fine for a handful of workers; if a
+# mission ever fans out to dozens of concurrent committers, give each agent its
+# own `git worktree` (separate index, shared object store) instead of a lock.
+set -eu
+[ $# -ge 2 ] || { echo "usage: wcommit <message> <path>..." >&2; exit 2; }
+msg=$1
+shift
+
+if command -v flock >/dev/null 2>&1; then   # absent on bare macOS (BOTFILE_NO_SANDBOX)
+  exec 9>"$(git rev-parse --absolute-git-dir)/wcommit.lock"
+  flock -w 60 9 || { echo "wcommit: timed out waiting for the commit lock" >&2; exit 1; }
+fi
+
+git add -- "$@"
+git commit -q -m "$msg" -- "$@"   # pathspec commit: only these paths, ignores others' staged work

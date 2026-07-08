@@ -23,9 +23,11 @@ COPY provision.sh /opt/botfiles/provision.sh
 RUN chmod +x /opt/botfiles/provision.sh && /opt/botfiles/provision.sh
 
 # The comms client agents call to reach the mission's host comms server over TCP
-# (COMMS_URL/COMMS_TOKEN/COMMS_AGENT are injected per `container exec`).
+# (COMMS_URL/COMMS_TOKEN/COMMS_AGENT are injected per `container exec`), plus
+# wcommit — the serialized commit wrapper workers use since they share one clone.
 COPY bin/comms /usr/local/bin/comms
-RUN chmod +x /usr/local/bin/comms
+COPY bin/wcommit /usr/local/bin/wcommit
+RUN chmod +x /usr/local/bin/comms /usr/local/bin/wcommit
 
 COPY sandbox/entrypoint.sh /usr/local/bin/entrypoint
 RUN chmod +x /usr/local/bin/entrypoint

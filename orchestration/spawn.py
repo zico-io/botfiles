@@ -26,6 +26,7 @@ import signal
 import socket
 import subprocess
 import sys
+import urllib.request
 
 # Per-harness launch template + a startup substring herdr waits for before we
 # inject the bootstrap prompt. {model}/{role} are filled per role.
@@ -245,6 +246,22 @@ def comms_up(feature):
     return url
 
 
+def comms_post(feature, agent, action, **fields):
+    """POST one comms action to this mission's server as `agent` (host-side, no CLI).
+
+    Lets `up` seed rooms before any agent boots - notably create the mission room
+    as the orchestrator so it owns+joins it and can `comms send` immediately
+    (op_join 404s on a missing room, so someone must create it first).
+    """
+    st = _load_state(feature)
+    req = urllib.request.Request(
+        f"{st['comms_url'].rstrip('/')}/{action}",
+        data=json.dumps({"agent": agent, **fields}).encode(),
+        headers={"Authorization": f"Bearer {st['comms_token']}", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req) as r:
+        return json.load(r)
+
+
 def herdr(*args):
     """Run a herdr command; return parsed JSON. Raise on socket/API errors."""
     out = subprocess.run(["herdr", *args], capture_output=True, text=True, check=True).stdout.strip()
@@ -311,9 +328,12 @@ def bootstrap(role, harness, feature, parent):
     return (
         f"You are '{role}', a {harness} agent, parent '{parent}'. Your comms identity is preset "
         f"in $COMMS_AGENT. Run `comms join {squad}` then `comms send {squad} ready`. Poll "
-        f"`comms inbox` / `comms read {squad}` for tasks, do them, report results with "
-        f"`comms send {squad} <result>`, and run `comms status done`. You are a leaf — do not "
-        f"spawn agents."
+        f"`comms inbox` / `comms read {squad}` for tasks, do them, and whenever a task changes "
+        f"files commit them with `wcommit '{role}: <what changed>' <the files you changed>` "
+        f"before you report - you share one clone with other workers, so wcommit serializes the "
+        f"commit and stages only your files (never `git add -A`); only committed work is "
+        f"harvested back to the repo at teardown. Report results with `comms send {squad} "
+        f"<result>`, and run `comms status done`. You are a leaf — do not spawn agents."
     )
 
 
@@ -377,6 +397,10 @@ def up(roster_path):
     if SANDBOX:
         mission_up(feature, repo)  # per-mission microVM: isolated clone + creds
     comms_up(feature)              # authoritative host comms server for this mission (all modes)
+    # Seed the mission room owned by the orchestrator (the pane the human drives).
+    # Leads then `join` it deterministically, and the orchestrator can `comms send`
+    # without a manual join step.
+    comms_post(feature, "orchestrator", "create-room", name=f"mission-{feature}")
 
     ws = herdr("workspace", "create", "--cwd", repo, "--label", f"mission-{feature}", "--no-focus")
     workspace_id = ws["result"]["workspace"]["workspace_id"]
@@ -474,6 +498,12 @@ def selfcheck():
         assert sandbox_wrap("claude --x", "t") == "container exec -it -w /work mission-t claude --x"
     else:
         assert sandbox_wrap("claude --x", "t") == "claude --x"
+
+    # bootstrap wiring: leads join the (orchestrator-owned) mission room; workers
+    # commit their file changes so harvest preserves them past teardown.
+    assert "comms join mission-f" in bootstrap("lead", "claude", "f", "orchestrator")
+    wb = bootstrap("w1", "claude", "f", "lead")
+    assert "comms join squad-lead" in wb and "wcommit" in wb
     print("selfcheck ok")
 
 
