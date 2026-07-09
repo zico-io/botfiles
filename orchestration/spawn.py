@@ -425,7 +425,11 @@ def bootstrap(role, harness, feature, parent, has_brief=False):
             f"comms). For each task: delegate to your workers in '{squad}' with `comms send {squad} "
             f"<task>`, collect their results (block on `comms wait {squad}`), report up to "
             f"'{mission}' with `comms send {mission} <result>`, then loop back to `comms wait "
-            f"{mission}`. Run `comms status done` when finished. Never spawn agents below layer 3."
+            f"{mission}`. Emit progress events so an observer can follow the fleet in `comms tui`: "
+            f"`comms event {mission} task-start --task '<label>'` on a new task, `comms event "
+            f"{mission} phase --phase '<what the squad is doing>'` while delegating, and `comms "
+            f"event {mission} task-done --task '<label>'` when you report the result up. "
+            f"Run `comms status done` when finished. Never spawn agents below layer 3."
         )
     squad = f"squad-{parent}"  # worker (layer 3)
     return (
@@ -436,9 +440,13 @@ def bootstrap(role, harness, feature, parent, has_brief=False):
         f"whenever it changes files commit them with `wcommit '{role}: <what changed>' <the files "
         f"you changed>` before you report - you share one clone with other workers, so wcommit "
         f"serializes the commit and stages only your files (never `git add -A`); only committed "
-        f"work is harvested back to the repo at teardown. Report results with `comms send {squad} "
-        f"<result>`, loop back to `comms wait {squad}`, and run `comms status done` when finished. "
-        f"You are a leaf — do not spawn agents."
+        f"work is harvested back to the repo at teardown. As you work, emit progress so an "
+        f"observer can follow you in `comms tui`: `comms event {squad} task-start --task '<short "
+        f"label>'` when you start, `comms progress {squad} <done>/<total>` or `comms event {squad} "
+        f"phase --phase '<current step>'` at milestones, `comms event {squad} blocked --to "
+        f"<who-or-what>` if you stall, and `comms event {squad} task-done --task '<label>'` before "
+        f"you report. Report results with `comms send {squad} <result>`, loop back to `comms wait "
+        f"{squad}`, and run `comms status done` when finished. You are a leaf — do not spawn agents."
     )
 
 
@@ -718,9 +726,14 @@ def selfcheck():
 
     # bootstrap wiring: leads join the (orchestrator-owned) mission room; workers
     # commit their file changes so harvest preserves them past teardown.
-    assert "comms join mission-f" in bootstrap("lead", "claude", "f", "orchestrator")
+    lead_b = bootstrap("lead", "claude", "f", "orchestrator")
+    assert "comms join mission-f" in lead_b
+    # progress emission wiring: leads emit lifecycle events to the mission room,
+    # workers emit lifecycle + step/phase/blocked to their squad room.
+    assert "comms event mission-f task-start" in lead_b and "comms event mission-f task-done" in lead_b
     wb = bootstrap("w1", "claude", "f", "lead")
     assert "comms join squad-lead" in wb and "wcommit" in wb
+    assert "comms event squad-lead task-start" in wb and "comms progress squad-lead" in wb
     # brief wiring: a lead reads+relays the brief only when one was posted
     assert "read mission-f --since 0" not in bootstrap("lead", "claude", "f", "orchestrator")
     lb = bootstrap("lead", "claude", "f", "orchestrator", has_brief=True)

@@ -44,6 +44,12 @@ catalog of teams: the orchestrator spawns only the team(s) a mission needs (pass
 lead roles to `up`, or omit for all), not the whole roster every time. Harnesses
 are claude/codex/pi. See `.botfile/memory/tools/orchestration.md`.
 
+Agents emit typed progress with `comms event <room> <kind>` / `comms progress
+<room> N/M` (kinds: task-start/done/error/abort, step, phase, blocked, handoff) so
+an observer can follow the fleet in `comms tui` - a live room-thread drill-in plus
+a per-agent progress panel. Events are non-consuming (a separate table, they never
+advance a read cursor), so monitoring never eats a message an agent still needs.
+
 ## Entity discipline
 
 Canonical records live in `.botfile/entities/entities.jsonl`, one JSON object
