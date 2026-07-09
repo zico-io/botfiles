@@ -100,6 +100,14 @@ def mission_workdir(feature, repo):
         subprocess.run(["git", "clone", "--quiet", repo, work], check=True)
     subprocess.run(["git", "-C", work, "checkout", "-B", f"mission-{feature}"],
                    check=True, capture_output=True)
+    # A fresh clone carries no author identity inside the mission VM (the host's
+    # global git config isn't mounted there), so an agent's first commit dies with
+    # "Author identity unknown". Seed the clone's local config from the host
+    # identity, per-key, falling back to a default when the host hasn't set it.
+    for key, default in (("user.name", "gilbert"), ("user.email", "gilbert@botfiles.local")):
+        host = subprocess.run(["git", "-C", repo, "config", key],
+                              capture_output=True, text=True).stdout.strip()
+        subprocess.run(["git", "-C", work, "config", key, host or default], check=True)
     return work
 
 
