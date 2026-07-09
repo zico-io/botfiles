@@ -203,6 +203,10 @@ def mission_secrets(feature):
     codex = os.path.expanduser("~/.codex/auth.json")
     if os.path.exists(codex):
         shutil.copyfile(codex, os.path.join(d, "codex.auth.json"))
+    # Vercel CLI cred (host `vercel login`), so in-VM agents can `vercel deploy`.
+    vercel = os.path.expanduser("~/Library/Application Support/com.vercel.cli/auth.json")
+    if os.path.exists(vercel):
+        shutil.copyfile(vercel, os.path.join(d, "vercel.auth.json"))
     return d
 
 

@@ -35,7 +35,8 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
 RUN npm install -g \
       @anthropic-ai/claude-code \
       @openai/codex \
-      @earendil-works/pi-coding-agent
+      @earendil-works/pi-coding-agent \
+      vercel
 
 # Bake the SSOT and reuse the host provisioner to wire AGENTS.md into each
 # harness's in-guest config (HOME=/root at build time). This also installs the

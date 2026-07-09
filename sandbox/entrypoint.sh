@@ -16,4 +16,10 @@ if [ -f /secrets/codex.auth.json ]; then
   chmod 600 "$HOME/.codex/auth.json"
 fi
 
+if [ -f /secrets/vercel.auth.json ]; then
+  mkdir -p "$HOME/.local/share/com.vercel.cli"
+  cp /secrets/vercel.auth.json "$HOME/.local/share/com.vercel.cli/auth.json"
+  chmod 600 "$HOME/.local/share/com.vercel.cli/auth.json"
+fi
+
 exec "$@"
