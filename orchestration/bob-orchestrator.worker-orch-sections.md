@@ -65,18 +65,41 @@ unspecified in the fetched docs, the same class of gap the parent RFC flagged fo
 same-session concurrent frames [eve-harness.rfc.md S10 risk 4] - needs the same kind of
 spike before this is load-bearing.
 
-**Sequence sketch** (one mission, one lead report reaching the human):
+**Sequence sketch, both directions** (aligns with worker-eve's S4 framing: one human-TUI
+session plus N mission-room sessions is N+1 concurrent sessions under one bob identity).
+
+Direction 1 - human/skill produces a brief, bob relays it down to a lead:
+
+```
+human session (bob)                mission-<feature> continuation token       orbal-net server        lead (claude, squad room)
+  /scope-mission produces brief -->|
+  model calls orbal_net_send tool -->|-- POST /send {room: mission-x, text: brief} -------->| message lands
+                                                                                              |-- SSE push, lead's own recv --> lead reads brief, relays to squad-<lead>
+```
+
+This is a normal outbound tool call from the human session, not a channel event - identical
+in shape to `orbal_net_send`/`orbal_net_event`/`orbal_net_progress` already defined for the
+leaf role [eve-harness.rfc.md S5]; the only difference is which session (human vs a mission
+room) the model happens to be reasoning in when it calls the tool.
+
+Direction 2 - a lead's report arrives, bob receives it as an inbound frame -> turn, then
+relays it up into the human session:
 
 ```
 lead (claude, squad room)     orbal-net server        connector          bob's mission-<feature> session      bob's human session
   orbal-net send mission-x -------->|-- SSE push ------->|-- POST /orbal-net/message ---->| turn runs
-                                                                                            |-- notify_human tool
-                                                                                            |     POST /eve/v1/session
-                                                                                            |     {continuationToken: human}
-                                                                                            |------------------------------->| turn appends
-                                                                                            |                                 | summary, streams
-                                                                                            |                                 | to human's TUI
+                                     (msg tagged for                                        |-- notify_human tool
+                                      mission-x's                                           |     POST /eve/v1/session
+                                      continuation token)                                   |     {continuationToken: human}
+                                                                                             |------------------------------->| turn appends
+                                                                                             |                                 | summary, streams
+                                                                                             |                                 | to human's TUI
 ```
+
+The connector routes each frame to the mission-room session whose continuation token
+matches the room it arrived on - exactly the per-`(room, agent)` routing already proven for
+a single leaf identity [eve-harness-v0.handoff.md sec 3], just fanned out to N mission rooms
+under bob's one `ORBAL_NET_AGENT` identity instead of N separate agent identities.
 
 ---
 
@@ -124,20 +147,33 @@ roster becomes a normal typed-tool error the model sees and can react to (re-pro
 roster, ask the human), rather than an opaque process exit the way a raw Bash failure reads
 today.
 
-**The GitHub bridge: where it lives now, and what changes.** Today `bridge_pr()` is called
-directly by whatever process is acting as the human-facing orchestrator - a claude L1
-running `python3 orchestration/spawn.py bridge-pr ...` via Bash, because spawned agents
-have no `gh`/network and their clone's origin is a local mirror (AGENTS.md; spawn.py
-comments). `spawn_bridge_pr.ts` calls the identical unmodified function the identical way;
-the privilege boundary does not move or widen, only the call surface changes. The
-human-in-the-loop property that justifies this trust today (a person is watching) is
-preserved because bob *is* the human-interactive front end (bet 1) - every tool call
-streams to the human's live TUI the same way Agent Runs and the streamed turn already
-surface tool activity [eve-harness.rfc.md S3.3, S6.4]. Position: hard-to-reverse tools -
-`spawn_bridge_pr`, `spawn_down`, anything that pushes to a real remote or tears down a
-mission - are configured as approval-required in bob's agent/tool config, mirroring
-AGENTS.md's "always confirm first" norm for irreversible actions, rather than auto-executed
-because the model chose to call them.
+**The GitHub bridge: where it lives now, and whether it collapses.** `bridge_pr()` exists
+*because* spawned leads/workers are air-gapped - no `gh`, no network, their clone's origin
+is a local mirror (AGENTS.md; spawn.py comments) - so someone with real GitHub access has to
+ship their work. But the function has never run *inside* that air gap: it is a plain
+`subprocess` call in `spawn.py`, invoked by whatever process is playing L1, and today's
+claude L1 already runs bare on the host (spawn.py's own docstring: the orchestrator is "the
+pane you are already in ... NOT spawned here", never wrapped by `sandbox_wrap`). bob-at-L1
+is local-first for the identical reason (non-goal: no deployed-remote orchestrator) and so
+sits in exactly the same position: **`bridge_pr()` does not collapse into a new direct-push
+mechanism, because it was never relocated away from L1 in the first place.** The two-step
+harvest-then-push ceremony exists for the leads'/workers' benefit (their commits live in an
+isolated clone with no route to `origin`), not because L1 lacked access - so nothing about
+bob having `gh`/network changes what the function needs to do. `spawn_bridge_pr.ts` therefore
+wraps the identical unmodified function the identical way; the only thing that changes is
+*how the decision to call it gets made*.
+
+That decision-making change is the actual safety question worth flagging. Today a human
+types the command, or a claude L1 chooses to run it as one Bash call among many, visible in
+the same transcript the human is reading. With bob, the call becomes a tool the model can
+invoke autonomously mid-turn - a live, irreversible, externally-visible GitHub write (a
+real push plus a real PR) triggered by model judgment rather than a keystroke. The
+human-in-the-loop property is preserved only if it is deliberately re-added at the tool
+layer: `spawn_bridge_pr` and `spawn_down` (mission teardown, also hard to reverse) are
+configured as approval-required in bob's agent/tool config, mirroring AGENTS.md's "always
+confirm first" norm for hard-to-reverse actions, and every tool call streams to the human's
+live TUI regardless [eve-harness.rfc.md S3.3, S6.4] so nothing happens off-screen even
+between an approval prompt and the human's response.
 
 ---
 
@@ -154,6 +190,26 @@ layer up, by which rooms bob's eve channel joins, not by a new policy.
 [eve-harness.rfc.md S7]. bob is just another orbal-net client subscribing to the rooms its
 identity belongs to; nothing about `validate()` or the server's room model needs to know or
 care that L1 is now an eve agent instead of a claude pane.
+
+**Join/leave lifecycle: the connector gains an incremental subscription surface.** The v0
+leaf connector is symmetric and all-or-nothing: `orbal_net_connector_up` starts it bound to
+one `(agent, room)` pair when its eve pane comes up, `orbal_net_connector_down` kills the
+whole process at mission teardown [spawn.py `orbal_net_connector_up`/`_down`]. bob's
+connector cannot be all-or-nothing the same way, because bob itself is already running when
+a new mission starts or an old one tears down (section 5's N+1-sessions point) - killing the
+connector to add or drop one mission would drop every other active mission's frames too.
+Position: bob's connector supports an incremental **attach/detach** operation on an
+already-running process - `spawn_up` (section 6) attaches a new `(bob, mission-<feature>)`
+subscription (and, for a fresh mission, first `create-room`/`join`s it, same as today's
+`orbal_net_post(..., "create-room", ...)` in `up()`) after the roster is spawned; `spawn_down`
+detaches that one subscription and lets `orbal-net serve` for that mission die as it does
+today, without touching bob's connector process or any other mission's subscription. This is
+a genuinely new connector capability beyond what the leaf v0 needed (flagged for section 10),
+though it is additive to, not a redesign of, the proven per-`(room, agent)` cursor/`--since`
+mechanics [eve-harness-v0.handoff.md sec 3]. Structurally this is also what keeps bob from
+ever leaking into a `squad-<lead>` room: the connector only ever attaches subscriptions for
+rooms `spawn_up`/`spawn_down` explicitly name, and those are always `mission-<feature>`,
+never a squad room a lead creates on its own.
 
 **bob driving existing claude/codex/pi leads, unchanged - the load-bearing simplicity
 point.** This RFC converts only L1. Leads and workers are not touched: a lead is still a
@@ -225,3 +281,10 @@ it, non-goal):
 4. **`herdr_*` tool minimalism.** Section 6 recommends wrapping only the herdr calls
    `spawn-team.md` already issues; the exact list needs a pass against the live skill (once
    ported per section 7) rather than being guessed here.
+5. **Incremental connector attach/detach (section 8).** The v0 connector's lifecycle is
+   all-or-nothing (one process per mission, started and killed with it); bob's connector
+   needs a live attach/detach of individual `(bob, mission-<feature>)` subscriptions on an
+   already-running process so one mission's `spawn_down` cannot drop another mission's
+   frames. This is new relative to the proven leaf mechanic and has not been prototyped;
+   flagged as a build-before-cutover item, same tier as the parent RFC's connector-liveness
+   risk [eve-harness.rfc.md S10 risk 2].
