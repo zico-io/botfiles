@@ -3,17 +3,17 @@
 
 Reads a roster JSON, spawns leads (layer 2) as herdr tabs and workers (layer 3)
 as pane splits inside their lead's tab, launches each harness binary, waits for
-it to be ready, then injects a bootstrap prompt that joins the agent's comms room.
+it to be ready, then injects a bootstrap prompt that joins the agent's orbal-net room.
 
-herdr owns placement/process/status; the per-mission comms server (`comms serve`,
-started here on the host - see comms_up) owns coordination - agents reach it with
-the same `comms` CLI over TCP. The orchestrator is layer 1 — the pane you are already
+herdr owns placement/process/status; the per-mission orbal-net server (`orbal-net serve`,
+started here on the host - see orbal_net_up) owns coordination - agents reach it with
+the same `orbal-net` CLI over TCP. The orchestrator is layer 1 — the pane you are already
 in — and is NOT spawned here.
 
 Usage:
   python3 spawn.py up   <roster.json> [teams]  # spawns fleet, prints {role: pane_id} JSON
                                                # teams = comma list of lead roles; omit = whole roster
-  python3 spawn.py poke <feature> <role> [msg] # wake an idle agent (comms nudges don't auto-submit)
+  python3 spawn.py poke <feature> <role> [msg] # wake an idle agent (orbal-net nudges don't auto-submit)
   python3 spawn.py status <feature>            # mission health: server, container, agents, rooms
   python3 spawn.py down <feature>              # tears down squad rooms + closes the workspace
   python3 spawn.py selfcheck                   # asserts the layer/hierarchy rules
@@ -46,8 +46,8 @@ SUBMIT_TIMEOUT_MS = "15000"  # how long to wait for an injected prompt to start 
 
 # Sandbox: run each mission inside one Apple `container` microVM (per-mission
 # granularity). Agents attach as `container exec` processes, so herdr's PTY
-# (banner match + send-keys) works unchanged; coordination is the host comms
-# server reached over TCP with the `comms` CLI (COMMS_* env injected per exec).
+# (banner match + send-keys) works unchanged; coordination is the host orbal-net
+# server reached over TCP with the `orbal-net` CLI (ORBAL_NET_* env injected per exec).
 # Default ON; BOTFILE_NO_SANDBOX=1 runs bare on the host (debugging only).
 # See .botfile/memory/tools/sandbox.md and sandbox/build.sh.
 SANDBOX = os.environ.get("BOTFILE_NO_SANDBOX") != "1"
@@ -253,11 +253,11 @@ def mission_down(feature):
 
 def sandbox_wrap(cmd, feature, env=None):
     """Wrap a harness command so it runs inside the mission's microVM, carrying
-    `env` (the COMMS_* identity/coords) into the agent's shell.
+    `env` (the ORBAL_NET_* identity/coords) into the agent's shell.
 
     With env=None the output is byte-identical to the un-wrapped form, so the
     hierarchy self-check stays valid. Bare mode prefixes the vars instead of
-    passing `-e` flags. (COMMS_* values contain no spaces, so no quoting needed.)
+    passing `-e` flags. (ORBAL_NET_* values contain no spaces, so no quoting needed.)
     """
     if SANDBOX:
         flags = "".join(f"-e {k}={v} " for k, v in (env or {}).items())
@@ -270,9 +270,9 @@ def _advertise_host():
     """Primary IP that guests/remote containers can reach the host on (not loopback).
 
     Uses the UDP-connect trick (no packet is sent) to pick the egress interface's
-    address; override with COMMS_ADVERTISE_HOST for VPN/remote topologies.
+    address; override with ORBAL_NET_ADVERTISE_HOST for VPN/remote topologies.
     """
-    override = os.environ.get("COMMS_ADVERTISE_HOST")
+    override = os.environ.get("ORBAL_NET_ADVERTISE_HOST")
     if override:
         return override
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -301,7 +301,7 @@ def _read_port(log_path, proc, deadline=10):
     end = time.time() + deadline
     while time.time() < end:
         if proc.poll() is not None:
-            sys.exit(f"comms server exited early (rc={proc.returncode}); see {log_path}")
+            sys.exit(f"orbal-net server exited early (rc={proc.returncode}); see {log_path}")
         first = ""
         try:
             with open(log_path) as f:
@@ -313,51 +313,70 @@ def _read_port(log_path, proc, deadline=10):
                 return json.loads(first)["port"]
             except (json.JSONDecodeError, KeyError):
                 proc.kill()
-                sys.exit(f"comms server first line was not a port: {first!r} (see {log_path})")
+                sys.exit(f"orbal-net server first line was not a port: {first!r} (see {log_path})")
         time.sleep(0.05)
     proc.kill()
-    sys.exit(f"comms server never reported a port within {deadline}s (see {log_path})")
+    sys.exit(f"orbal-net server never reported a port within {deadline}s (see {log_path})")
 
 
-def comms_up(feature):
-    """Start this mission's authoritative comms server (`comms serve`) on the host and
+def _ensure_orbal_net():
+    """Make sure the `orbal-net` binary is on PATH, installing it if not.
+
+    Tries the crates.io release first; until v0.1.0 is published (or if the
+    registry copy is unreachable) falls back to installing straight from the
+    public repo so a fresh host can still stand up a mission.
+    """
+    if shutil.which("orbal-net"):
+        return
+    print("orbal-net not on PATH; installing...", file=sys.stderr)
+    if subprocess.run(["cargo", "install", "orbal-net"]).returncode == 0:
+        return
+    r = subprocess.run(["cargo", "install", "--git", "https://github.com/zico-io/orbal-net", "orbal-net"])
+    if r.returncode != 0:
+        sys.exit("could not install orbal-net (tried crates.io and git); install manually")
+
+
+def orbal_net_up(feature):
+    """Start this mission's authoritative orbal-net server (`orbal-net serve`) on the host and
     record how to reach it in mission.json. One server per mission; killing it at
-    teardown is the room cleanup. State persists to comms.db beside mission.json, so a
+    teardown is the room cleanup. State persists to orbal-net.db beside mission.json, so a
     server restart mid-mission keeps every room and message. Runs in every mode (the
     server is a host process, VM or not)."""
+    _ensure_orbal_net()
     token = secrets.token_hex(16)
     state_dir = os.path.join(MISSIONS_ROOT, feature)
     os.makedirs(state_dir, exist_ok=True)
-    db = os.path.join(state_dir, "comms.db")
-    log_path = os.path.join(state_dir, "comms.log")
+    db = os.path.join(state_dir, "orbal-net.db")
+    log_path = os.path.join(state_dir, "orbal-net.log")
     log = open(log_path, "w")
     try:
         # start_new_session detaches the server from spawn.py's process group so a
         # Ctrl-C / pane close in the launching terminal can't take it down mid-mission.
-        # Output goes to comms.log (not a pipe) so it can never block on a full buffer
+        # Output goes to orbal-net.log (not a pipe) so it can never block on a full buffer
         # and leaves a trace if the server dies.
-        proc = subprocess.Popen(["comms", "serve", "--token", token, "--db", db],
+        proc = subprocess.Popen(["orbal-net", "serve", "--token", token, "--db", db],
                                 stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     except FileNotFoundError:
-        sys.exit("comms server failed to start: `comms` binary not on PATH (run provision.sh)")
+        sys.exit("orbal-net server failed to start: `orbal-net` binary not on PATH "
+                 "(cargo's bin dir may be missing from PATH; see _ensure_orbal_net)")
     port = _read_port(log_path, proc)
     url = f"http://{_advertise_host()}:{port}"
-    _save_state(feature, comms_url=url, comms_token=token, comms_pid=proc.pid)
+    _save_state(feature, orbal_net_url=url, orbal_net_token=token, orbal_net_pid=proc.pid)
     return url
 
 
-def comms_post(feature, agent, action, **fields):
-    """POST one comms action to this mission's server as `agent` (host-side, no CLI).
+def orbal_net_post(feature, agent, action, **fields):
+    """POST one orbal-net action to this mission's server as `agent` (host-side, no CLI).
 
     Lets `up` seed rooms before any agent boots - notably create the mission room
-    as the orchestrator so it owns+joins it and can `comms send` immediately
+    as the orchestrator so it owns+joins it and can `orbal-net send` immediately
     (op_join 404s on a missing room, so someone must create it first).
     """
     st = _load_state(feature)
     req = urllib.request.Request(
-        f"{st['comms_url'].rstrip('/')}/{action}",
+        f"{st['orbal_net_url'].rstrip('/')}/{action}",
         data=json.dumps({"agent": agent, **fields}).encode(),
-        headers={"Authorization": f"Bearer {st['comms_token']}", "Content-Type": "application/json"})
+        headers={"Authorization": f"Bearer {st['orbal_net_token']}", "Content-Type": "application/json"})
     with urllib.request.urlopen(req) as r:
         return json.load(r)
 
@@ -408,9 +427,9 @@ def validate(roster):
 
 
 def bootstrap(role, harness, feature, parent, has_brief=False):
-    """First-turn prompt: join the right comms room via the `comms` CLI.
+    """First-turn prompt: join the right orbal-net room via the `orbal-net` CLI.
 
-    Identity is preset in $COMMS_AGENT (injected per exec), so the server upserts
+    Identity is preset in $ORBAL_NET_AGENT (injected per exec), so the server upserts
     the agent on its first call - no explicit register step.
     """
     mission = f"mission-{feature}"
@@ -419,42 +438,42 @@ def bootstrap(role, harness, feature, parent, has_brief=False):
         # The brief is posted to the mission room by `up` before leads join, so pull it
         # with `read --since 0` (full history) and relay it into the squad for workers.
         brief = (
-            f"After joining, run `comms read {mission} --since 0` to pull the mission brief "
+            f"After joining, run `orbal-net read {mission} --since 0` to pull the mission brief "
             f"(posted before you joined) - it is your guiding scope; then relay it to your "
-            f"workers with `comms send {squad} <brief>`. "
+            f"workers with `orbal-net send {squad} <brief>`. "
         ) if has_brief else ""
         return (
             f"You are '{role}', a {harness} agent in mission '{feature}', parent orchestrator. "
-            f"Your comms identity is preset in $COMMS_AGENT. Run these shell commands now: "
-            f"`comms join {mission}`, `comms create-room {squad}`, `comms send {mission} ready`. "
+            f"Your orbal-net identity is preset in $ORBAL_NET_AGENT. Run these shell commands now: "
+            f"`orbal-net join {mission}`, `orbal-net create-room {squad}`, `orbal-net send {mission} ready`. "
             + brief +
-            f"Then await tasks by BLOCKING on `comms wait {mission}` — it returns the moment a "
+            f"Then await tasks by BLOCKING on `orbal-net wait {mission}` — it returns the moment a "
             f"message arrives, so NEVER write a shell poll loop (no `while`/`for`/`sleep` around "
-            f"comms). For each task: delegate to your workers in '{squad}' with `comms send {squad} "
-            f"<task>`, collect their results (block on `comms wait {squad}`), report up to "
-            f"'{mission}' with `comms send {mission} <result>`, then loop back to `comms wait "
-            f"{mission}`. Emit progress events so an observer can follow the fleet in `comms tui`: "
-            f"`comms event {mission} task-start --task '<label>'` on a new task, `comms event "
-            f"{mission} phase --phase '<what the squad is doing>'` while delegating, and `comms "
+            f"orbal-net). For each task: delegate to your workers in '{squad}' with `orbal-net send {squad} "
+            f"<task>`, collect their results (block on `orbal-net wait {squad}`), report up to "
+            f"'{mission}' with `orbal-net send {mission} <result>`, then loop back to `orbal-net wait "
+            f"{mission}`. Emit progress events so an observer can follow the fleet in `orbal-net tui`: "
+            f"`orbal-net event {mission} task-start --task '<label>'` on a new task, `orbal-net event "
+            f"{mission} phase --phase '<what the squad is doing>'` while delegating, and `orbal-net "
             f"event {mission} task-done --task '<label>'` when you report the result up. "
-            f"Run `comms status done` when finished. Never spawn agents below layer 3."
+            f"Run `orbal-net status done` when finished. Never spawn agents below layer 3."
         )
     squad = f"squad-{parent}"  # worker (layer 3)
     return (
-        f"You are '{role}', a {harness} agent, parent '{parent}'. Your comms identity is preset "
-        f"in $COMMS_AGENT. Run `comms join {squad}` then `comms send {squad} ready`. Then BLOCK on "
-        f"`comms wait {squad}` for each task — it returns as soon as a message arrives, so NEVER "
-        f"write a shell poll loop (no `while`/`for`/`sleep` around comms). Do the task, and "
+        f"You are '{role}', a {harness} agent, parent '{parent}'. Your orbal-net identity is preset "
+        f"in $ORBAL_NET_AGENT. Run `orbal-net join {squad}` then `orbal-net send {squad} ready`. Then BLOCK on "
+        f"`orbal-net wait {squad}` for each task — it returns as soon as a message arrives, so NEVER "
+        f"write a shell poll loop (no `while`/`for`/`sleep` around orbal-net). Do the task, and "
         f"whenever it changes files commit them with `wcommit '{role}: <what changed>' <the files "
         f"you changed>` before you report - you share one clone with other workers, so wcommit "
         f"serializes the commit and stages only your files (never `git add -A`); only committed "
         f"work is harvested back to the repo at teardown. As you work, emit progress so an "
-        f"observer can follow you in `comms tui`: `comms event {squad} task-start --task '<short "
-        f"label>'` when you start, `comms progress {squad} <done>/<total>` or `comms event {squad} "
-        f"phase --phase '<current step>'` at milestones, `comms event {squad} blocked --to "
-        f"<who-or-what>` if you stall, and `comms event {squad} task-done --task '<label>'` before "
-        f"you report. Report results with `comms send {squad} <result>`, loop back to `comms wait "
-        f"{squad}`, and run `comms status done` when finished. You are a leaf — do not spawn agents."
+        f"observer can follow you in `orbal-net tui`: `orbal-net event {squad} task-start --task '<short "
+        f"label>'` when you start, `orbal-net progress {squad} <done>/<total>` or `orbal-net event {squad} "
+        f"phase --phase '<current step>'` at milestones, `orbal-net event {squad} blocked --to "
+        f"<who-or-what>` if you stall, and `orbal-net event {squad} task-done --task '<label>'` before "
+        f"you report. Report results with `orbal-net send {squad} <result>`, loop back to `orbal-net wait "
+        f"{squad}`, and run `orbal-net status done` when finished. You are a leaf — do not spawn agents."
     )
 
 
@@ -475,7 +494,7 @@ def submit(pane, spec):
             herdr("wait", "output", pane, "--match", spec["working"], "--timeout", SUBMIT_TIMEOUT_MS)
         except subprocess.CalledProcessError:
             # Prompt was almost certainly already submitted: the agent is off running a
-            # foreground command (e.g. a `comms` poll loop), whose TUI footer isn't the
+            # foreground command (e.g. an `orbal-net` poll loop), whose TUI footer isn't the
             # idle "working" marker we wait for. Best-effort confirm, so don't abort the
             # whole fleet over it. ponytail: if a pane truly swallowed the prompt, poke it.
             pass
@@ -484,12 +503,12 @@ def submit(pane, spec):
 def launch(pane, role, harness, model, feature, parent, has_brief=False):
     """Run the harness in `pane`, wait for it to be ready, inject the bootstrap.
 
-    Each agent's shell carries its comms coordinates + identity so the baked-in
-    `comms` CLI (and its subshells) can reach the mission server as this role.
+    Each agent's shell carries its orbal-net coordinates + identity so the baked-in
+    `orbal-net` CLI (and its subshells) can reach the mission server as this role.
     """
     spec = HARNESSES[harness]
     st = _load_state(feature)
-    env = {"COMMS_URL": st["comms_url"], "COMMS_TOKEN": st["comms_token"], "COMMS_AGENT": role}
+    env = {"ORBAL_NET_URL": st["orbal_net_url"], "ORBAL_NET_TOKEN": st["orbal_net_token"], "ORBAL_NET_AGENT": role}
     herdr("pane", "run", pane, sandbox_wrap(spec["cmd"].format(model=model, role=role), feature, env))
     herdr("wait", "output", pane, "--match", spec["ready"], "--timeout", READY_TIMEOUT_MS)
     herdr("pane", "run", pane, bootstrap(role, harness, feature, parent, has_brief))
@@ -499,10 +518,10 @@ def launch(pane, role, harness, model, feature, parent, has_brief=False):
 def poke(feature, role, message=None):
     """Wake an agent by submitting a prompt straight into its pane.
 
-    `comms wait` gives push while an agent is blocked on it, but an agent sitting idle
+    `orbal-net wait` gives push while an agent is blocked on it, but an agent sitting idle
     at its prompt (between tasks, or not currently waiting) won't see a new room message
     on its own. `herdr pane run` types AND submits a prompt, which wakes the agent so it
-    re-checks comms. This is a herdr/PTY-level nudge, not a comms message, so it
+    re-checks orbal-net. This is a herdr/PTY-level nudge, not an orbal-net message, so it
     does not put the orchestrator into a worker's room - the hierarchy holds. In sandbox
     mode only the host can reach herdr, so pokes originate from the orchestrator. Use
     whenever a target didn't act on a room message. (herdr is host-pane-local, so this
@@ -512,7 +531,7 @@ def poke(feature, role, message=None):
     info = (st.get("roles") or {}).get(role)
     if not info:
         sys.exit(f"no role {role!r} in fleet {feature!r} (run `up` first)")
-    msg = message or "Run `comms inbox` and act on any new messages now."
+    msg = message or "Run `orbal-net inbox` and act on any new messages now."
     herdr("pane", "run", info["pane"], msg)
     submit(info["pane"], HARNESSES[info["harness"]])
     print(f"poked {role} ({info['pane']})")
@@ -538,13 +557,13 @@ def select_leads(roster, only=None):
 
 
 def _reset_mission_state(feature):
-    """Clear a prior run's comms DB + log so a fresh `up` starts from clean
-    coordination state. A leftover comms.db (from an interrupted `down`) would
+    """Clear a prior run's orbal-net DB + log so a fresh `up` starts from clean
+    coordination state. A leftover orbal-net.db (from an interrupted `down`) would
     resurrect its rooms/messages and boot the new agents onto stale instructions.
     The mid-mission server *restart* path reuses the db and does not call this.
     Leaves the mission clone (work/) untouched."""
     d = os.path.join(MISSIONS_ROOT, feature)
-    for f in ("comms.db", "comms.db-wal", "comms.db-shm", "comms.log"):
+    for f in ("orbal-net.db", "orbal-net.db-wal", "orbal-net.db-shm", "orbal-net.log"):
         try:
             os.remove(os.path.join(d, f))
         except FileNotFoundError:
@@ -561,18 +580,18 @@ def up(roster_path, only=None):
     try:
         if SANDBOX:
             mission_up(feature, repo)  # per-mission microVM: isolated clone + creds
-        comms_up(feature)              # authoritative host comms server for this mission (all modes)
+        orbal_net_up(feature)              # authoritative host orbal-net server for this mission (all modes)
         # Seed the mission room owned by the orchestrator (the pane the human drives).
-        # Leads then `join` it deterministically, and the orchestrator can `comms send`
+        # Leads then `join` it deterministically, and the orchestrator can `orbal-net send`
         # without a manual join step.
-        comms_post(feature, "orchestrator", "create-room", name=f"mission-{feature}")
+        orbal_net_post(feature, "orchestrator", "create-room", name=f"mission-{feature}")
 
         # If `/scope-mission` wrote a brief next to the roster, seed it as the mission
         # room's first message so every lead reads it (and relays it) before working.
         brief_path = os.path.join(os.path.dirname(roster_path), f"{feature}.brief.md")
         has_brief = os.path.isfile(brief_path)
         if has_brief:
-            comms_post(feature, "orchestrator", "send",
+            orbal_net_post(feature, "orchestrator", "send",
                        room=f"mission-{feature}", text=open(brief_path).read())
 
         ws = herdr("workspace", "create", "--cwd", repo, "--label", f"mission-{feature}", "--no-focus")
@@ -619,10 +638,10 @@ def up(roster_path, only=None):
 
 def down(feature):
     label = f"mission-{feature}"
-    # Kill the mission's comms server: it is the single authority for every room
+    # Kill the mission's orbal-net server: it is the single authority for every room
     # (mission + all squads), so killing it IS the room cleanup - no orphaned squad
     # rooms, no per-lead teardown pokes. Read the pid before state is deleted below.
-    pid = _load_state(feature).get("comms_pid")
+    pid = _load_state(feature).get("orbal_net_pid")
     if pid:
         try:
             os.kill(pid, signal.SIGTERM)
@@ -646,19 +665,19 @@ def down(feature):
 
 
 def status(feature):
-    """One-shot mission health: comms server, container, agents, room activity.
-    Replaces the manual ps/lsof/container/comms dig used to diagnose a stall."""
+    """One-shot mission health: orbal-net server, container, agents, room activity.
+    Replaces the manual ps/lsof/container/orbal-net dig used to diagnose a stall."""
     st = _load_state(feature)
     if not st:
         sys.exit(f"no mission state for {feature} (is it up?)")
     out = [f"mission: {feature}"]
 
-    pid = st.get("comms_pid")
+    pid = st.get("orbal_net_pid")
     alive = bool(pid) and _pid_alive(pid)
-    out.append(f"  comms server: pid {pid} {'ALIVE' if alive else 'DEAD'}  {st.get('comms_url','?')}")
+    out.append(f"  orbal-net server: pid {pid} {'ALIVE' if alive else 'DEAD'}  {st.get('orbal_net_url','?')}")
     if not alive:
-        out.append(f"    (restart: comms serve --token {st.get('comms_token','?')} "
-                   f"--port <port-from-url> --db {os.path.join(MISSIONS_ROOT, feature, 'comms.db')})")
+        out.append(f"    (restart: orbal-net serve --token {st.get('orbal_net_token','?')} "
+                   f"--port <port-from-url> --db {os.path.join(MISSIONS_ROOT, feature, 'orbal-net.db')})")
 
     if SANDBOX:
         rows = subprocess.run(["container", "list"], capture_output=True, text=True).stdout.splitlines()
@@ -667,17 +686,17 @@ def status(feature):
 
     if alive:
         try:
-            agents = comms_post(feature, "orchestrator", "agents").get("agents", [])
+            agents = orbal_net_post(feature, "orchestrator", "agents").get("agents", [])
             out.append("  agents: " + (", ".join(f"{a['id']}({a['status']})" for a in agents) or "(none)"))
-            for r in comms_post(feature, "orchestrator", "rooms").get("rooms", []):
+            for r in orbal_net_post(feature, "orchestrator", "rooms").get("rooms", []):
                 # peek (non-consuming) from seq 0 so status never eats the orchestrator's cursor
-                msgs = comms_post(feature, "orchestrator", "read",
+                msgs = orbal_net_post(feature, "orchestrator", "read",
                                   room=r["name"], since=0, peek=True).get("messages", [])
                 last = msgs[-1] if msgs else None
                 tail = f'  last[{last["seq"]}] {last["from"]}: {last["text"][:70]}' if last else ""
                 out.append(f"  room {r['name']}: {len(msgs)} msgs{tail}")
         except Exception as e:
-            out.append(f"  (comms query failed: {e})")
+            out.append(f"  (orbal-net query failed: {e})")
     print("\n".join(out))
 
 
@@ -735,17 +754,17 @@ def selfcheck():
     # bootstrap wiring: leads join the (orchestrator-owned) mission room; workers
     # commit their file changes so harvest preserves them past teardown.
     lead_b = bootstrap("lead", "claude", "f", "orchestrator")
-    assert "comms join mission-f" in lead_b
+    assert "orbal-net join mission-f" in lead_b
     # progress emission wiring: leads emit lifecycle events to the mission room,
     # workers emit lifecycle + step/phase/blocked to their squad room.
-    assert "comms event mission-f task-start" in lead_b and "comms event mission-f task-done" in lead_b
+    assert "orbal-net event mission-f task-start" in lead_b and "orbal-net event mission-f task-done" in lead_b
     wb = bootstrap("w1", "claude", "f", "lead")
-    assert "comms join squad-lead" in wb and "wcommit" in wb
-    assert "comms event squad-lead task-start" in wb and "comms progress squad-lead" in wb
+    assert "orbal-net join squad-lead" in wb and "wcommit" in wb
+    assert "orbal-net event squad-lead task-start" in wb and "orbal-net progress squad-lead" in wb
     # brief wiring: a lead reads+relays the brief only when one was posted
     assert "read mission-f --since 0" not in bootstrap("lead", "claude", "f", "orchestrator")
     lb = bootstrap("lead", "claude", "f", "orchestrator", has_brief=True)
-    assert "read mission-f --since 0" in lb and "comms send squad-lead <brief>" in lb
+    assert "read mission-f --since 0" in lb and "orbal-net send squad-lead <brief>" in lb
     print("selfcheck ok")
 
 

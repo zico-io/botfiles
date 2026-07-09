@@ -27,8 +27,8 @@ Every fact ends with inline provenance:
 
 ## Orchestration protocol
 
-Multi-agent work runs on **herdr** (placement/process/status) + the **`comms`
-CLI** talking to a per-mission **comms server** on the host (coordination). Max
+Multi-agent work runs on **herdr** (placement/process/status) + the **`orbal-net`
+CLI** talking to a per-mission **orbal-net server** on the host (coordination). Max
 **three layers**, enforced by room membership:
 
 - **L1 orchestrator** — the pane you are in. Talks to leads in `mission-<feature>`.
@@ -39,14 +39,14 @@ CLI** talking to a per-mission **comms server** on the host (coordination). Max
 Rooms are public, joined by name. The orchestrator never messages a worker
 directly. Stand up / tear down a fleet from a roster with
 `orchestration/spawn.py` (`up`/`down`) or the `/spawn-team` command; `up` starts
-the mission's comms server and `down` kills it (rooms die with it). A roster is a
+the mission's orbal-net server and `down` kills it (rooms die with it). A roster is a
 catalog of teams: the orchestrator spawns only the team(s) a mission needs (pass
 lead roles to `up`, or omit for all), not the whole roster every time. Harnesses
 are claude/codex/pi. See `.botfile/memory/tools/orchestration.md`.
 
-Agents emit typed progress with `comms event <room> <kind>` / `comms progress
+Agents emit typed progress with `orbal-net event <room> <kind>` / `orbal-net progress
 <room> N/M` (kinds: task-start/done/error/abort, step, phase, blocked, handoff) so
-an observer can follow the fleet in `comms tui` - a live room-thread drill-in plus
+an observer can follow the fleet in `orbal-net tui` - a live room-thread drill-in plus
 a per-agent progress panel. Events are non-consuming (a separate table, they never
 advance a read cursor), so monitoring never eats a message an agent still needs.
 

@@ -29,25 +29,20 @@ touch "$HOME/.claude/CLAUDE.md"
 grep -qxF "@$SSOT" "$HOME/.claude/CLAUDE.md" || printf '@%s\n' "$SSOT" >> "$HOME/.claude/CLAUDE.md"
 echo "ensured @import in $HOME/.claude/CLAUDE.md"
 
-# comms: one Rust binary that is both the per-mission server (`comms serve`) and the
-# client agents call. Build it for the host and put it on the orchestrator's PATH.
-# (In the image build this source tree is absent; the Containerfile builds the guest
-# binary in a multi-stage step instead, so the guard keeps the image build clean.)
-COMMS_DIR="$(dirname "$SSOT")/comms"
-if [ -d "$COMMS_DIR" ]; then
-  if command -v cargo >/dev/null 2>&1; then
-    if ( cd "$COMMS_DIR" && cargo build --release --quiet ); then
-      BIN="$COMMS_DIR/target/release/comms"
-      # spawn.py's comms_up invokes `comms` by name, so it must be on PATH. ~/.local/bin
-      # needs no sudo and is already on PATH; also drop it in /usr/local/bin when writable.
-      mkdir -p "$HOME/.local/bin"
-      ln -sf "$BIN" "$HOME/.local/bin/comms"
-      ln -sf "$BIN" /usr/local/bin/comms 2>/dev/null || true
-      echo "built + linked comms -> $HOME/.local/bin/comms"
-    else
-      echo "note: comms build failed (add $COMMS_DIR/target/release to PATH manually)"
-    fi
+# orbal-net: one Rust binary (github.com/zico-io/orbal-net) that is both the
+# per-mission server (`orbal-net serve`) and the client agents call. Install it
+# for the host and put it on the orchestrator's PATH. spawn.py's
+# `_ensure_orbal_net` does the same check-and-install at mission-up time, so
+# this is a convenience: front-load the (slow, network) install here instead
+# of on the first `spawn.py up`.
+if command -v cargo >/dev/null 2>&1; then
+  if command -v orbal-net >/dev/null 2>&1; then
+    echo "orbal-net already on PATH"
+  elif cargo install --quiet orbal-net || cargo install --quiet --git https://github.com/zico-io/orbal-net orbal-net; then
+    echo "installed orbal-net -> $(command -v orbal-net)"
   else
-    echo "note: cargo not found — install Rust (https://rustup.rs) to build the comms binary"
+    echo "note: orbal-net install failed (tried crates.io and git; install manually)"
   fi
+else
+  echo "note: cargo not found — install Rust (https://rustup.rs) to install the orbal-net binary"
 fi

@@ -3,15 +3,6 @@
 # `container exec` process inside it. Built by sandbox/build.sh.
 # See .botfile/memory/tools/sandbox.md.
 
-# Stage 1: build the comms binary for the guest (linux). rusqlite's `bundled`
-# feature compiles SQLite from source, so only a C toolchain is needed - no
-# system libsqlite. The host builds its own copy natively via provision.sh.
-FROM rust:1-slim AS comms-build
-WORKDIR /src
-COPY comms/Cargo.toml comms/Cargo.toml
-COPY comms/src comms/src
-RUN cd comms && cargo build --release && strip target/release/comms
-
 FROM debian:trixie-slim
 
 # Node 22 from NodeSource: pi's bundled undici 8.x calls worker_threads
@@ -37,26 +28,28 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     && cargo binstall -y cargo-deny cargo-llvm-cov \
     && rm -rf "$CARGO_HOME/registry"
 
-# Harnesses (all node CLIs, linux/arm64). Coordination is the host comms server
-# reached via the `comms` CLI (copied below) - no in-guest coordination daemon.
-# ponytail: if a harness has no linux/arm64 build, drop it here — don't fake it.
+# Harnesses (all node CLIs, linux/arm64). Coordination is the host orbal-net server
+# reached via the `orbal-net` CLI (installed below via provision.sh) - no in-guest
+# coordination daemon. ponytail: if a harness has no linux/arm64 build, drop it
+# here — don't fake it.
 RUN npm install -g \
       @anthropic-ai/claude-code \
       @openai/codex \
       @earendil-works/pi-coding-agent
 
 # Bake the SSOT and reuse the host provisioner to wire AGENTS.md into each
-# harness's in-guest config (HOME=/root at build time).
+# harness's in-guest config (HOME=/root at build time). This also installs the
+# `orbal-net` binary agents call to reach the mission's host orbal-net server
+# over TCP (ORBAL_NET_URL/ORBAL_NET_TOKEN/ORBAL_NET_AGENT are injected per
+# `container exec`) - `cargo install` lands it in $CARGO_HOME/bin, already on
+# PATH from the Rust-toolchain step above.
 COPY AGENTS.md /opt/botfiles/AGENTS.md
 COPY provision.sh /opt/botfiles/provision.sh
 RUN chmod +x /opt/botfiles/provision.sh && /opt/botfiles/provision.sh
 
-# The comms binary agents call to reach the mission's host comms server over TCP
-# (COMMS_URL/COMMS_TOKEN/COMMS_AGENT are injected per `container exec`), plus
 # wcommit — the serialized commit wrapper workers use since they share one clone.
-COPY --from=comms-build /src/comms/target/release/comms /usr/local/bin/comms
 COPY bin/wcommit /usr/local/bin/wcommit
-RUN chmod +x /usr/local/bin/comms /usr/local/bin/wcommit
+RUN chmod +x /usr/local/bin/wcommit
 
 COPY sandbox/entrypoint.sh /usr/local/bin/entrypoint
 RUN chmod +x /usr/local/bin/entrypoint
