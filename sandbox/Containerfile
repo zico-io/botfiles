@@ -18,6 +18,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # plus cargo-deny + cargo-llvm-cov (prebuilt via cargo-binstall, no compile) so the
 # entire CI gate runs inside the mission VM. build-essential (above) is the C
 # toolchain rusqlite's bundled SQLite needs; llvm-tools-preview backs llvm-cov.
+# ripgrep is the real `rg` binary the bob eve harness's search_content/search_files
+# tools spawn (the interactive shells' `rg` is a Claude Code function, not on PATH
+# for node's spawn); binstall'd here so every eve spawn has it. apt has no rg pkg.
 # System-wide CARGO_HOME/RUSTUP_HOME so every `container exec` session sees it.
 ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH
@@ -26,7 +29,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
         -c rustfmt -c clippy -c llvm-tools-preview \
     && curl -L --proto '=https' --tlsv1.2 -sSf \
         https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash \
-    && cargo binstall -y cargo-deny cargo-llvm-cov \
+    && cargo binstall -y cargo-deny cargo-llvm-cov ripgrep \
     && rm -rf "$CARGO_HOME/registry"
 
 # Harnesses (all node CLIs, linux/arm64). Coordination is the host orbal-net server
