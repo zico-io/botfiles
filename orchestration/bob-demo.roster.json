@@ -1,0 +1,9 @@
+{
+  "feature": "bob-demo",
+  "repo": "/Users/percules/dev/bob",
+  "roles": [
+    {"role": "demo-lead",     "parent": "orchestrator", "harness": "claude", "model": "opus"},
+    {"role": "worker-claude", "parent": "demo-lead",    "harness": "claude", "model": "sonnet"},
+    {"role": "worker-eve",    "parent": "demo-lead",    "harness": "eve",    "model": "anthropic/claude-sonnet-5"}
+  ]
+}

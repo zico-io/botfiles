@@ -1,0 +1,9 @@
+{
+  "feature": "eve-harness-v0",
+  "repo": "/Users/percules/dev/monkey-belay",
+  "roles": [
+    {"role": "belay-lead",       "parent": "orchestrator", "harness": "claude", "model": "opus"},
+    {"role": "worker-harness",   "parent": "belay-lead",   "harness": "claude", "model": "sonnet"},
+    {"role": "worker-connector", "parent": "belay-lead",   "harness": "claude", "model": "sonnet"}
+  ]
+}

@@ -32,6 +32,24 @@ import sys
 import time
 import urllib.request
 
+# The `eve` harness pane runs the built eve production server (`eve start`, :3000),
+# NOT an agent TUI. It: wipes the durable store (parked sessions from a prior run
+# resume and refire tool calls, stalling startup); installs deps - a fresh mission
+# clone has NO node_modules (gitignored), so `eve build`/`start` cannot boot without
+# this (`npm ci` from the committed lockfile, falling back to `npm install`); links a
+# Vercel project so the model resolves via AI Gateway (writes .env.local with a fresh
+# VERCEL_OIDC_TOKEN; the TEAM slug is `zico-ios-projects` - the personal handle
+# `zico-io` is rejected as a scope); then serves. `-w /work` (from sandbox_wrap) is
+# the cwd. Parens (not braces) group the install so this stays safe under .format().
+# No {model} is used (agent.ts pins it); {role}/{model} pass through .format harmlessly.
+EVE_START_CMD = (
+    "sh -lc 'rm -rf .workflow-data && "
+    "(npm ci || npm install) && "
+    "npx eve build && "
+    "vercel link --yes --scope zico-ios-projects --project bob >/dev/null 2>&1; "
+    "exec npx eve start'"
+)
+
 # Per-harness launch template + a startup substring herdr waits for before we
 # inject the bootstrap prompt. {model}/{role} are filled per role.
 # ponytail: ready strings and flags are version-sensitive — tune here if a
@@ -40,9 +58,18 @@ HARNESSES = {
     "claude": {"cmd": "claude --dangerously-skip-permissions --model {model}", "ready": "bypass permissions on", "working": "esc to interrupt"},
     "codex":  {"cmd": "codex --dangerously-bypass-approvals-and-sandbox --model {model}", "ready": "Codex", "working": "esc to interrupt"},
     "pi":     {"cmd": "pi --name {role} --model {model}", "ready": "pi", "working": "esc to interrupt"},
+    # eve is a server pane, not a TUI: ready when it logs it is serving on :3000;
+    # it has no "working" marker (turns are sub-second Function calls on the session
+    # stream, not a busy footer), so launch() skips bootstrap()/submit for it.
+    "eve":    {"cmd": EVE_START_CMD, "ready": "server listening at http://127.0.0.1:3000/", "working": None},
 }
 
 READY_TIMEOUT_MS = "90000"  # ponytail: cold microVM start; raise if the VM/host gets slower
+# The eve pane runs `npm ci` + `npx eve build` before `eve start` serves (a fresh
+# mission clone has no node_modules/.output, both gitignored), which can exceed the
+# generic ready timeout. Give the eve pane its own longer ceiling. ponytail: raise
+# if a cold `npm ci` + `eve build` gets slower.
+EVE_READY_TIMEOUT_MS = os.environ.get("EVE_READY_TIMEOUT_MS", "180000")
 SUBMIT_TIMEOUT_MS = "15000"  # how long to wait for an injected prompt to start running
 
 # Sandbox: run each mission inside one Apple `container` microVM (per-mission
@@ -398,6 +425,145 @@ def orbal_net_up(feature):
     return url
 
 
+# --- eve connector lifecycle (symmetric to orbal_net_up) ---------------------
+# A LOCAL eve role runs `eve start` in a herdr pane inside the mission VM; its
+# connector runs ALONGSIDE it (same VM in sandbox mode; same host in bare mode),
+# because the connector must reach BOTH the eve server (127.0.0.1:3000, in the VM)
+# and orbal-net (the host LAN url, reachable from the VM's open egress). The
+# connector owns its pidfile/log/cursor under the mission clone (/work in the VM =
+# the workdir on the host via the bind mount), so host-side status()/down() read
+# them through the mount. This is the one genuinely new always-on dependency this
+# harness adds (RFC S10 risk 2); a dead connector is silent, so status() surfaces
+# it. Files live under /work; bob's .gitignore excludes `.bob-connector.*`.
+
+# In-VM (== /work) paths; on the host these are under st["workdir"].
+_BOB_CONNECTOR_PID = ".bob-connector.pid"
+_BOB_CONNECTOR_LOG = ".bob-connector.log"
+_BOB_CONNECTOR_CURSOR = ".bob-connector-cursor.json"
+
+
+def _connector_host_paths(st):
+    """Host-visible paths for the connector's pidfile + log (via the /work mount).
+    Bare mode has no VM, so the workdir IS the host path either way."""
+    wd = st["workdir"]
+    return os.path.join(wd, _BOB_CONNECTOR_PID), os.path.join(wd, _BOB_CONNECTOR_LOG)
+
+
+def orbal_net_connector_up(feature, agent, room):
+    """Start the standalone orbal-net -> eve connector for the eve leaf role.
+
+    Detached, alongside `eve start`. The connector writes its own pidfile (the
+    authoritative pid record) + heartbeat log under /work; we record the agent,
+    room, and those paths in mission.json. Called by up() after the eve pane is
+    READY (so EVE_URL :3000 answers; a connector that starts first just retries).
+    """
+    st = _load_state(feature)
+    env = {
+        "ORBAL_NET_URL": st["orbal_net_url"],
+        "ORBAL_NET_TOKEN": st["orbal_net_token"],
+        "ORBAL_NET_AGENT": agent,
+        "ORBAL_NET_ROOM": room,
+        "EVE_URL": "http://127.0.0.1:3000",
+        "CONNECTOR_PID_PATH": f"/work/{_BOB_CONNECTOR_PID}" if SANDBOX else os.path.join(st["workdir"], _BOB_CONNECTOR_PID),
+        "CONNECTOR_LOG_PATH": f"/work/{_BOB_CONNECTOR_LOG}" if SANDBOX else os.path.join(st["workdir"], _BOB_CONNECTOR_LOG),
+        "CONNECTOR_CURSOR_PATH": f"/work/{_BOB_CONNECTOR_CURSOR}" if SANDBOX else os.path.join(st["workdir"], _BOB_CONNECTOR_CURSOR),
+    }
+    if SANDBOX:
+        # Detach inside the VM: nohup + background so `container exec` returns while
+        # node keeps running as a child of the VM's init. The connector's own
+        # console output goes to .bob-connector.stdout (crash diagnostics); its
+        # heartbeat log (mtime source for status) is CONNECTOR_LOG_PATH, which it
+        # appends to itself. ponytail: if `container exec` detach ever reaps the
+        # child on return, switch to a host Popen of `container exec ... node ...`.
+        # nohup + `&` alone survives the exec shell exiting (the container `sh` is
+        # dash/busybox, which has no `disown` builtin - it would exit 127). nohup
+        # guards SIGHUP; node reparents to the VM's init when this shell returns.
+        envs = "".join(f"{k}={v} " for k, v in env.items())
+        inner = f"nohup env {envs}node /work/connector/main.ts >>/work/.bob-connector.stdout 2>&1 &"
+        subprocess.run(["container", "exec", f"mission-{feature}", "sh", "-lc", inner], check=True)
+    else:
+        log = open(os.path.join(MISSIONS_ROOT, feature, "bob-connector.stdout"), "a")
+        subprocess.Popen(["node", os.path.join(st["workdir"], "connector", "main.ts")],
+                         env={**os.environ, **env}, cwd=st["workdir"],
+                         stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    _save_state(feature, eve_connector={"agent": agent, "room": room})
+    return env
+
+
+def _connector_invm_pid(st):
+    """Read the connector's own pidfile (in-VM pid), via the host /work mount."""
+    pidfile, _ = _connector_host_paths(st)
+    try:
+        return int(open(pidfile).read().strip())
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+def _vm_kill(feature, sig, pid):
+    """Signal an in-VM pid. `kill` is a shell BUILTIN, not a standalone executable in
+    the mission image, so `container exec ... kill` fails ("target executable kill");
+    it must run through a shell. Returns the CompletedProcess (returncode 0 = signal
+    delivered / process exists for -0)."""
+    return subprocess.run(["container", "exec", f"mission-{feature}", "sh", "-lc", f"kill -{sig} {pid}"],
+                          capture_output=True)
+
+
+def orbal_net_connector_down(feature):
+    """Gracefully stop the connector (SIGTERM -> grace -> SIGKILL) so it fsyncs its
+    cursor before exit. In sandbox mode the following `container rm -f` (mission_down)
+    is the hard backstop that reaps it with the VM regardless; this just gives it a
+    clean shutdown first. No-op if there is no eve connector for this mission."""
+    st = _load_state(feature)
+    if not st.get("eve_connector"):
+        return
+    pid = _connector_invm_pid(st)
+    if not pid:
+        return
+    if SANDBOX:
+        # Signal the in-VM pid through the VM (host os.kill can't reach a VM pid).
+        _vm_kill(feature, "TERM", pid)
+        for _ in range(50):  # up to ~5s grace for a clean cursor-flushing exit
+            if _vm_kill(feature, "0", pid).returncode != 0:
+                break
+            time.sleep(0.1)
+        else:
+            _vm_kill(feature, "9", pid)
+    else:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            for _ in range(50):
+                if not _pid_alive(pid):
+                    break
+                time.sleep(0.1)
+            else:
+                os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+def orbal_net_connector_status(feature, st):
+    """One status line for the connector: pid liveness + heartbeat freshness.
+    A stale heartbeat with a live pid is the important STALLED case (wedged, not
+    exited). Mirrors how status() reports the orbal-net server."""
+    ec = st.get("eve_connector")
+    if not ec:
+        return None
+    pid = _connector_invm_pid(st)
+    if not pid:
+        return f"  eve connector ({ec['agent']} in {ec['room']}): DOWN (no pidfile)"
+    if SANDBOX:
+        alive = _vm_kill(feature, "0", pid).returncode == 0
+    else:
+        alive = _pid_alive(pid)
+    _, logfile = _connector_host_paths(st)
+    try:
+        fresh = (time.time() - os.path.getmtime(logfile)) < 30  # heartbeat every ~10s
+    except FileNotFoundError:
+        fresh = False
+    state = "UP" if (alive and fresh) else ("STALLED (pid alive, heartbeat stale)" if alive else "DOWN")
+    return f"  eve connector ({ec['agent']} in {ec['room']}): {state}  pid {pid}"
+
+
 def _verify_agent_orbal_net(feature):
     """Fail loud if the agent environment can't resolve `orbal-net` before launch.
 
@@ -568,6 +734,17 @@ def launch(pane, role, harness, model, feature, parent, has_brief=False):
     spec = HARNESSES[harness]
     st = _load_state(feature)
     env = {"ORBAL_NET_URL": st["orbal_net_url"], "ORBAL_NET_TOKEN": st["orbal_net_token"], "ORBAL_NET_AGENT": role}
+    if harness == "eve":
+        # An eve role's pane runs the durable server (`eve start`), not an agent
+        # TUI. The join/recv/emit protocol is compiled into the eve project's
+        # channel + tools, so there is NO bootstrap()/submit step. The room is
+        # injected so the outbound tools default to the right room; the connector
+        # (orbal_net_connector_up) feeds this server its inbound frames. Waits on a
+        # longer ceiling because the pane runs npm ci + eve build before eve start.
+        env["ORBAL_NET_ROOM"] = f"squad-{parent}"
+        herdr("pane", "run", pane, sandbox_wrap(spec["cmd"].format(model=model, role=role), feature, env))
+        herdr("wait", "output", pane, "--match", spec["ready"], "--timeout", EVE_READY_TIMEOUT_MS)
+        return
     herdr("pane", "run", pane, sandbox_wrap(spec["cmd"].format(model=model, role=role), feature, env))
     herdr("wait", "output", pane, "--match", spec["ready"], "--timeout", READY_TIMEOUT_MS)
     herdr("pane", "run", pane, bootstrap(role, harness, feature, parent, has_brief))
@@ -682,6 +859,12 @@ def up(roster_path, only=None):
         roles = {r["role"]: {"pane": panes[r["role"]], "parent": r["parent"], "harness": r["harness"]}
                  for r in roster["roles"] if r["role"] in panes}
         _save_state(feature, roles=roles)
+
+        # Start the connector for each spawned eve leaf role (v0: exactly one). After
+        # the launch loop so the eve pane's :3000 is already READY when it connects.
+        for r in roster["roles"]:
+            if r.get("harness") == "eve" and r["role"] in panes:
+                orbal_net_connector_up(feature, r["role"], f"squad-{r['parent']}")
     except BaseException as e:
         # Never leave an orphan microVM / half-built workspace / server behind on a
         # failed (or interrupted) `up`; tear down whatever was started, then re-raise.
@@ -707,6 +890,12 @@ def down(feature):
             os.kill(pid, signal.SIGTERM)
         except ProcessLookupError:
             pass  # already gone (crashed / manually killed) - nothing to clean up
+
+    # Gracefully stop the eve connector before tearing the VM down, so it fsyncs its
+    # cursor. In sandbox mode the `container rm -f` in mission_down is the hard reap
+    # regardless; this is the clean-shutdown-first step. Must run before state is
+    # cleared below.
+    orbal_net_connector_down(feature)
 
     closed = None
     for w in herdr("workspace", "list")["result"]["workspaces"]:
@@ -743,6 +932,11 @@ def status(feature):
         rows = subprocess.run(["container", "list"], capture_output=True, text=True).stdout.splitlines()
         row = next((r for r in rows if f"mission-{feature}" in r), None)
         out.append(f"  container: {'running' if row else 'NOT running'}")
+
+    # eve connector liveness (silent-failure dependency; only present on eve missions).
+    conn = orbal_net_connector_status(feature, st)
+    if conn:
+        out.append(conn)
 
     if alive:
         try:
@@ -832,6 +1026,23 @@ def selfcheck():
     # bridge-pr argv: --fill without a title, explicit title/body with one
     assert _pr_cmd("mission-f", None)[-1] == "--fill" and "mission-f" in _pr_cmd("mission-f", None)
     assert "--title" in _pr_cmd("mission-f", "t") and "t" in _pr_cmd("mission-f", "t")
+
+    # eve harness: a server pane (ready on :3000, no "working" marker), launched
+    # without bootstrap; its start command wipes the durable store, links the Vercel
+    # TEAM scope (zico-ios-projects, not the rejected personal handle), runs eve start.
+    assert HARNESSES["eve"]["ready"] == "server listening at http://127.0.0.1:3000/"
+    assert HARNESSES["eve"]["working"] is None
+    assert "eve start" in EVE_START_CMD and "zico-ios-projects" in EVE_START_CMD
+    assert "rm -rf .workflow-data" in EVE_START_CMD
+    # FIX 3: a fresh mission clone has no node_modules, so the eve pane installs deps
+    # (npm ci, falling back to npm install) before building/serving.
+    assert "npm ci" in EVE_START_CMD and "npm install" in EVE_START_CMD
+    assert "--project bob" in EVE_START_CMD  # rebranded Vercel project
+    # EVE_START_CMD passes through .format harmlessly (no placeholders to fill)
+    assert HARNESSES["eve"]["cmd"].format(model="m", role="r") == EVE_START_CMD
+    # connector status is a no-op line when the mission has no eve connector
+    assert orbal_net_connector_status("t", {}) is None
+    assert orbal_net_connector_status("t", {"eve_connector": None}) is None
     print("selfcheck ok")
 
 
