@@ -15,6 +15,7 @@ Usage:
                                                # teams = comma list of lead roles; omit = whole roster
   python3 spawn.py poke <feature> <role> [msg] # wake an idle agent (orbal-net nudges don't auto-submit)
   python3 spawn.py status <feature>            # mission health: server, container, agents, rooms
+  python3 spawn.py bridge-pr <feature> [title] # push mission-<feature> to origin + open a PR via gh
   python3 spawn.py down <feature>              # tears down squad rooms + closes the workspace
   python3 spawn.py selfcheck                   # asserts the layer/hierarchy rules
 
@@ -152,6 +153,34 @@ def harvest(feature, repo, workdir):
         return True
     print(f"warning: could not harvest {branch}: {r.stderr.strip()}", file=sys.stderr)
     return False
+
+
+def _pr_cmd(branch, title):
+    """Build the `gh pr create` argv. Pure (selfcheck-testable): with a title we set an
+    explicit body, otherwise `--fill` pulls title+body from the branch's commits."""
+    cmd = ["gh", "pr", "create", "--head", branch, "--base", "main"]
+    return cmd + (["--title", title, "--body", f"Bridged mission branch `{branch}`."]
+                  if title else ["--fill"])
+
+
+def bridge_pr(feature, title=None):
+    """Push the mission branch to the origin remote and open a PR via `gh`.
+
+    Agents have no gh/network and their clone's origin is a local mirror, so the
+    orchestrator ships their work: harvest the branch into the origin repo (whose origin
+    IS the real remote), push it, then open the PR from the host. Reuses `harvest`.
+    """
+    st = _load_state(feature)
+    repo, workdir = st.get("repo"), st.get("workdir")
+    if not repo:
+        sys.exit(f"no mission state for {feature!r} (run `up` first)")
+    branch = f"mission-{feature}"
+    if workdir and not harvest(feature, repo, workdir):
+        sys.exit(f"could not harvest {branch} into {repo}; resolve before bridging")
+    if subprocess.run(["git", "-C", repo, "push", "-u", "origin", branch]).returncode != 0:
+        sys.exit(f"git push of {branch} to origin failed")
+    if subprocess.run(_pr_cmd(branch, title), cwd=repo).returncode != 0:
+        sys.exit("gh pr create failed (already open? see `gh pr list`)")
 
 
 def mission_secrets(feature):
@@ -365,6 +394,28 @@ def orbal_net_up(feature):
     return url
 
 
+def _verify_agent_orbal_net(feature):
+    """Fail loud if the agent environment can't resolve `orbal-net` before launch.
+
+    Agents reach the mission server through this binary; if it is missing they fall back
+    to recompiling it from the mission repo at join - slow, and it trips the repo's pinned
+    toolchain. In SANDBOX the binary is baked into the image, so a stale/broken image (e.g.
+    a swallowed install in provision.sh, or a pre-rebrand image with only `comms`) must
+    abort `up` here rather than degrade silently. Bare mode shares the host PATH, already
+    guaranteed by `_ensure_orbal_net`.
+    """
+    if SANDBOX:
+        r = subprocess.run(["container", "exec", f"mission-{feature}", "sh", "-lc",
+                            "command -v orbal-net"], capture_output=True, text=True)
+        if r.returncode != 0:
+            sys.exit(f"mission image lacks orbal-net on PATH - rebuild the sandbox image so "
+                     f"provision.sh reinstalls it; the comms->orbal-net rebrand likely left a "
+                     f"stale image. (checked: container exec mission-{feature} command -v orbal-net)")
+    elif not shutil.which("orbal-net"):
+        sys.exit("orbal-net not on PATH for agents (bare mode) - install it before spawning "
+                 "(`cargo install orbal-net`)")
+
+
 def orbal_net_post(feature, agent, action, **fields):
     """POST one orbal-net action to this mission's server as `agent` (host-side, no CLI).
 
@@ -444,14 +495,16 @@ def bootstrap(role, harness, feature, parent, has_brief=False):
         ) if has_brief else ""
         return (
             f"You are '{role}', a {harness} agent in mission '{feature}', parent orchestrator. "
-            f"Your orbal-net identity is preset in $ORBAL_NET_AGENT. Run these shell commands now: "
+            f"Your orbal-net identity is preset in $ORBAL_NET_AGENT. The `orbal-net` CLI is "
+            f"preinstalled on PATH; if it is ever not found, STOP and report it - do NOT build it "
+            f"from the mission repo. Run these shell commands now: "
             f"`orbal-net join {mission}`, `orbal-net create-room {squad}`, `orbal-net send {mission} ready`. "
             + brief +
-            f"Then await tasks by BLOCKING on `orbal-net wait {mission}` — it returns the moment a "
+            f"Then await tasks by BLOCKING on `orbal-net recv {mission}` — it returns the moment a "
             f"message arrives, so NEVER write a shell poll loop (no `while`/`for`/`sleep` around "
             f"orbal-net). For each task: delegate to your workers in '{squad}' with `orbal-net send {squad} "
-            f"<task>`, collect their results (block on `orbal-net wait {squad}`), report up to "
-            f"'{mission}' with `orbal-net send {mission} <result>`, then loop back to `orbal-net wait "
+            f"<task>`, collect their results (block on `orbal-net recv {squad}`), report up to "
+            f"'{mission}' with `orbal-net send {mission} <result>`, then loop back to `orbal-net recv "
             f"{mission}`. Emit progress events so an observer can follow the fleet in `orbal-net tui`: "
             f"`orbal-net event {mission} task-start --task '<label>'` on a new task, `orbal-net event "
             f"{mission} phase --phase '<what the squad is doing>'` while delegating, and `orbal-net "
@@ -461,8 +514,10 @@ def bootstrap(role, harness, feature, parent, has_brief=False):
     squad = f"squad-{parent}"  # worker (layer 3)
     return (
         f"You are '{role}', a {harness} agent, parent '{parent}'. Your orbal-net identity is preset "
-        f"in $ORBAL_NET_AGENT. Run `orbal-net join {squad}` then `orbal-net send {squad} ready`. Then BLOCK on "
-        f"`orbal-net wait {squad}` for each task — it returns as soon as a message arrives, so NEVER "
+        f"in $ORBAL_NET_AGENT. The `orbal-net` CLI is preinstalled on PATH; if it is ever not found, "
+        f"STOP and report it - do NOT build it from the mission repo. "
+        f"Run `orbal-net join {squad}` then `orbal-net send {squad} ready`. Then BLOCK on "
+        f"`orbal-net recv {squad}` for each task — it returns as soon as a message arrives, so NEVER "
         f"write a shell poll loop (no `while`/`for`/`sleep` around orbal-net). Do the task, and "
         f"whenever it changes files commit them with `wcommit '{role}: <what changed>' <the files "
         f"you changed>` before you report - you share one clone with other workers, so wcommit "
@@ -472,7 +527,7 @@ def bootstrap(role, harness, feature, parent, has_brief=False):
         f"label>'` when you start, `orbal-net progress {squad} <done>/<total>` or `orbal-net event {squad} "
         f"phase --phase '<current step>'` at milestones, `orbal-net event {squad} blocked --to "
         f"<who-or-what>` if you stall, and `orbal-net event {squad} task-done --task '<label>'` before "
-        f"you report. Report results with `orbal-net send {squad} <result>`, loop back to `orbal-net wait "
+        f"you report. Report results with `orbal-net send {squad} <result>`, loop back to `orbal-net recv "
         f"{squad}`, and run `orbal-net status done` when finished. You are a leaf — do not spawn agents."
     )
 
@@ -518,7 +573,7 @@ def launch(pane, role, harness, model, feature, parent, has_brief=False):
 def poke(feature, role, message=None):
     """Wake an agent by submitting a prompt straight into its pane.
 
-    `orbal-net wait` gives push while an agent is blocked on it, but an agent sitting idle
+    `orbal-net recv` gives push while an agent is blocked on it, but an agent sitting idle
     at its prompt (between tasks, or not currently waiting) won't see a new room message
     on its own. `herdr pane run` types AND submits a prompt, which wakes the agent so it
     re-checks orbal-net. This is a herdr/PTY-level nudge, not an orbal-net message, so it
@@ -581,6 +636,7 @@ def up(roster_path, only=None):
         if SANDBOX:
             mission_up(feature, repo)  # per-mission microVM: isolated clone + creds
         orbal_net_up(feature)              # authoritative host orbal-net server for this mission (all modes)
+        _verify_agent_orbal_net(feature)   # fail loud now if agents can't resolve `orbal-net`
         # Seed the mission room owned by the orchestrator (the pane the human drives).
         # Leads then `join` it deterministically, and the orchestrator can `orbal-net send`
         # without a manual join step.
@@ -765,6 +821,13 @@ def selfcheck():
     assert "read mission-f --since 0" not in bootstrap("lead", "claude", "f", "orchestrator")
     lb = bootstrap("lead", "claude", "f", "orchestrator", has_brief=True)
     assert "read mission-f --since 0" in lb and "orbal-net send squad-lead <brief>" in lb
+
+    # bootstrap tells agents the CLI is preinstalled (never build it from the mission repo)
+    assert "do NOT build it from the mission repo" in lead_b and "do NOT build it from the mission repo" in wb
+
+    # bridge-pr argv: --fill without a title, explicit title/body with one
+    assert _pr_cmd("mission-f", None)[-1] == "--fill" and "mission-f" in _pr_cmd("mission-f", None)
+    assert "--title" in _pr_cmd("mission-f", "t") and "t" in _pr_cmd("mission-f", "t")
     print("selfcheck ok")
 
 
@@ -776,6 +839,8 @@ if __name__ == "__main__":
         poke(args[1], args[2], args[3] if len(args) == 4 else None)
     elif args[:1] == ["status"] and len(args) == 2:
         status(args[1])
+    elif args[:1] == ["bridge-pr"] and 2 <= len(args) <= 3:
+        bridge_pr(args[1], args[2] if len(args) == 3 else None)
     elif args[:1] == ["down"] and len(args) == 2:
         down(args[1])
     elif args == ["selfcheck"]:

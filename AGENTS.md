@@ -46,9 +46,18 @@ are claude/codex/pi. See `.botfile/memory/tools/orchestration.md`.
 
 Agents emit typed progress with `orbal-net event <room> <kind>` / `orbal-net progress
 <room> N/M` (kinds: task-start/done/error/abort, step, phase, blocked, handoff) so
-an observer can follow the fleet in `orbal-net tui` - a live room-thread drill-in plus
-a per-agent progress panel. Events are non-consuming (a separate table, they never
-advance a read cursor), so monitoring never eats a message an agent still needs.
+an observer can follow the fleet in `orbal-net tui` - a live dashboard fed by one
+persistent server-push connection (no polling), with a room-thread drill-in plus a
+per-agent progress panel. Events are non-consuming (a separate table, they never
+advance a read cursor), so monitoring never eats a message an agent still needs. To
+monitor room *messages* the same way, use `orbal-net peek <room>` (non-consuming) - never
+`read`, which advances your cursor and eats messages agents still need. Agents block
+for their next task with `orbal-net recv <room>` (push-backed, replaces the old
+`wait`) - never a shell poll loop.
+
+Spawned agents have no `gh`/network and their clone's origin is a local mirror, so the
+orchestrator bridges every live GitHub step (push + PR via `spawn.py bridge-pr <feature>`,
+release edits, repo settings); agents prepare those artifacts as files/text.
 
 ## Entity discipline
 
