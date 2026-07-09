@@ -5,11 +5,12 @@
 
 FROM debian:trixie-slim
 
-# Node 22 from NodeSource: pi's bundled undici 8.x calls worker_threads
-# markAsUncloneable, which Debian trixie's Node 20 lacks (pi crashes on boot).
+# Node 24 from NodeSource: eve (Vercel agent framework) requires Node >=24, and
+# 24 still satisfies pi's bundled undici 8.x, which calls worker_threads
+# markAsUncloneable (absent in Debian trixie's Node 20, so pi crashed on boot).
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git curl ca-certificates python3 build-essential \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
