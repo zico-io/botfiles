@@ -107,6 +107,47 @@ End state: `npm i -g @zico/bob` places exactly two package directories under npm
 postinstall network fetch beyond npm's own package resolution (everything else is bundled or
 `bundledDependencies`), no separate `cargo install`, no separate download for `herdr`/`orbal-net`.
 
+### 3.1 Package payload vs. mutable runtime state (load-bearing for section 8)
+
+Everything in the tree above is the PACKAGE PAYLOAD - npm-owned, read-only in practice, and
+REPLACED wholesale on every `npm i -g @zico/bob@<newer>` / `npm update -g @zico/bob` (npm does not
+diff-patch a global install; it removes the old package directory contents and writes the new
+package's files in its place). That is fine for everything listed in the tree - `agent/`,
+`.output/`, `vendor/`, the platform package's binaries are all meant to be replaced on update. It
+is NOT fine for what `bin/bob` (bin-bob.sh today) currently writes: the durable eve session store
+(`.workflow-data` - the ALL-DAY conversation `bin/bob` explicitly never wipes), the shared
+`orbal-net serve` state (`.bob-orbal-net.db`, `.bob-orbal-net.token`), and the process logs
+(`.bob-eve.log`, `orbal-net-connector.log`, `.bob-orbal-net.log`) - `bin-bob.sh` writes every one
+of these repo-root-relative (`cd "$(dirname "$0")/.." ; ... "${BOB_EVE_LOG:-.bob-eve.log}"` etc.
+[reference/bob-repo/bin-bob.sh:38,41-42,61-63]) because in the dev-repo world the repo root IS the
+one stable, human-owned directory. A globally-installed npm package has no such directory - its
+"root" is npm-managed and gets replaced out from under any file written there.
+
+Position: split package payload from mutable state at the top level. The package payload lives
+under npm's global `node_modules/@zico/bob/` (the tree above, unchanged); ALL mutable
+runtime state moves to `state_dir` (worker-ux's 7.1 config field, default `~/.local/state/bob`,
+XDG-conventional and outside every npm-managed directory):
+
+```
+~/.local/state/bob/                 # state_dir - NEVER touched by npm, survives every update
+├── .workflow-data/                 # the durable eve session store (bin-bob.sh's "never wipe" file)
+├── orbal-net.db                    # was .bob-orbal-net.db - shared server's room/message state
+├── orbal-net.token                 # was .bob-orbal-net.token - persisted server auth token, 0600
+└── logs/
+    ├── eve.log                     # was .bob-eve.log
+    ├── connector.log                # was orbal-net-connector.log
+    └── orbal-net-server.log         # was .bob-orbal-net.log
+```
+
+`bin/bob`'s ported entry (S3's `bin/bob`) resolves `state_dir` from config (env override > config
+> `~/.local/state/bob` default, worker-ux's 7.1 precedence) and points every one of these paths at
+it instead of a repo-root-relative default - a one-line change in KIND from today's `bin-bob.sh`
+(the variables `EVE_LOG`/`SERVER_TOKEN_FILE`/`SERVER_DB`/`SERVER_LOG` already exist as overridable
+env vars today [reference/bob-repo/bin-bob.sh:41-42,61-63]; packaging just changes their default
+from repo-root-relative to `state_dir`-relative). This is why section 8's update story can claim
+the durable session survives `npm update -g` - it is a structural property of WHERE state lives,
+not a promise `bob doctor` has to enforce after the fact.
+
 ---
 
 ## 4. The eve-app bundle: PREBUILT .output (decided)
@@ -298,6 +339,17 @@ which carries an updated exact `optionalDependencies` pin, which forces npm to u
 for the two to desync as long as the pin stays exact and both packages publish atomically from the
 same release.
 
+`npm update -g` only ever touches the PACKAGE PAYLOAD (npm's global `node_modules/@zico/bob/` and
+`node_modules/@zico/bob-darwin-arm64/`, both wholesale-replaced) - it has no reason to, and no
+mechanism to, touch `state_dir` (3.1, default `~/.local/state/bob`), because nothing under
+`state_dir` is part of either npm package. This is WHY the durable all-day session
+(`.workflow-data`), the shared `orbal-net` server's room/message history (`orbal-net.db`), and its
+persisted auth token survive a `bob` update untouched - not a promise layered on top, but a direct
+consequence of 3.1's payload/state split. The only thing worth `bob doctor` checking here is the
+inverse failure mode: confirm `state_dir` is NOT accidentally nested inside the npm package
+directory (a config or install regression that would silently reintroduce the destroy-on-update bug
+this split exists to prevent).
+
 Four things move together; only one is npm-native, the other three are bob's own coherence claims
 that `bob doctor` must actively verify post-update, since npm has no mechanism to guarantee them:
 
@@ -341,7 +393,13 @@ responsibility to detect.
 
 ---
 
-## Microsandbox install mechanism (feeds section 7.4 - worker-ux places this in init/doctor UX; I own the mechanism)
+## Microsandbox install mechanism (confirms 5.2's pattern, feeds section 7.4 - worker-ux places this in init/doctor UX; I own the mechanism)
+
+CONFIRMED, independently of worker-ux's own finding (same conclusion, reached separately before
+comparing notes): the public installer, not a scripted `eve dev` boot, is the pick for both 5.2
+(this is the same "don't shell out through an undocumented internal trigger when a project ships a
+real installer" logic 5.2 already applies to `herdr`/`orbal-net`) and 7.4 (where worker-ux wires it
+into `bob init`/`bob doctor`).
 
 Grounded in `agent/sandbox.ts`: `defineSandbox({ backend: microsandbox({ setup: { autoInstall:
 true } }) })` [reference/bob-repo/agent/sandbox.ts:1-22]. The file's own comment matches exactly
