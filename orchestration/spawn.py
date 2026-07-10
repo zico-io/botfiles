@@ -30,6 +30,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 
 # The `eve` harness pane runs the built eve production server (`eve start`, :3000),
@@ -401,7 +402,21 @@ def orbal_net_up(feature):
     record how to reach it in mission.json. One server per mission; killing it at
     teardown is the room cleanup. State persists to orbal-net.db beside mission.json, so a
     server restart mid-mission keeps every room and message. Runs in every mode (the
-    server is a host process, VM or not)."""
+    server is a host process, VM or not).
+
+    Additive opt-in (gap #1): if ORBAL_NET_SHARED_URL/ORBAL_NET_SHARED_TOKEN are set
+    (bob's L1 launcher exports this dedicated pair when it owns a host-level shared
+    server), skip spawning a per-mission server and record the shared one instead -
+    no orbal_net_pid, since we don't own that process and must never kill it. Gated
+    strictly on the SHARED pair, never on ORBAL_NET_URL, so a plain spawn.py launch
+    (legacy claude-L1 path, which never sets these) stays byte-for-byte unchanged.
+    """
+    shared_url = os.environ.get("ORBAL_NET_SHARED_URL")
+    shared_token = os.environ.get("ORBAL_NET_SHARED_TOKEN")
+    if shared_url and shared_token:
+        _save_state(feature, orbal_net_url=shared_url, orbal_net_token=shared_token, orbal_net_shared=True)
+        return shared_url
+
     _ensure_orbal_net()
     token = secrets.token_hex(16)
     state_dir = os.path.join(MISSIONS_ROOT, feature)
@@ -879,17 +894,46 @@ def up(roster_path, only=None):
     print(json.dumps(panes))
 
 
+def _retire_shared_rooms(feature, st):
+    """down()'s shared-server branch: retire this mission's rooms (mission room +
+    each lead's squad room) instead of killing a process we don't own.
+    destroy-room takes a "room" field (NOT "name" - the server is asymmetric
+    here: create-room takes "name") and enforces room ownership. The mission
+    room is orchestrator-owned (created by up()), but each squad-<lead> room is
+    LEAD-owned (leads `create-room` it themselves in bootstrap) - destroying it
+    as "orchestrator" 403s and leaks the room on this long-lived server (it
+    would then outlive the mission and collide with "room already exists" on
+    the next run of the same lead role). The token authorizes the request; the
+    "agent" field asserts identity, so post each destroy-room as the room's
+    actual owner. A destroy-room failure is a warning, not an abort - a stale
+    room is harmless, the shared server outlives every mission and just
+    carries a dead room until the next restart instead of blocking teardown.
+    """
+    targets = [("orchestrator", f"mission-{feature}")]
+    targets += [(role, f"squad-{role}") for role, info in (st.get("roles") or {}).items()
+                if info.get("parent") == "orchestrator"]
+    for agent, room in targets:
+        try:
+            orbal_net_post(feature, agent, "destroy-room", room=room)
+        except Exception as e:
+            print(f"warning: could not destroy-room {room!r} on shared orbal-net server: {e}", file=sys.stderr)
+
+
 def down(feature):
     label = f"mission-{feature}"
-    # Kill the mission's orbal-net server: it is the single authority for every room
-    # (mission + all squads), so killing it IS the room cleanup - no orphaned squad
-    # rooms, no per-lead teardown pokes. Read the pid before state is deleted below.
-    pid = _load_state(feature).get("orbal_net_pid")
-    if pid:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass  # already gone (crashed / manually killed) - nothing to clean up
+    st = _load_state(feature)
+    if st.get("orbal_net_shared"):
+        _retire_shared_rooms(feature, st)
+    else:
+        # Kill the mission's orbal-net server: it is the single authority for every room
+        # (mission + all squads), so killing it IS the room cleanup - no orphaned squad
+        # rooms, no per-lead teardown pokes. Read the pid before state is deleted below.
+        pid = st.get("orbal_net_pid")
+        if pid:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass  # already gone (crashed / manually killed) - nothing to clean up
 
     # Gracefully stop the eve connector before tearing the VM down, so it fsyncs its
     # cursor. In sandbox mode the `container rm -f` in mission_down is the hard reap
@@ -921,12 +965,19 @@ def status(feature):
         sys.exit(f"no mission state for {feature} (is it up?)")
     out = [f"mission: {feature}"]
 
-    pid = st.get("orbal_net_pid")
-    alive = bool(pid) and _pid_alive(pid)
-    out.append(f"  orbal-net server: pid {pid} {'ALIVE' if alive else 'DEAD'}  {st.get('orbal_net_url','?')}")
-    if not alive:
-        out.append(f"    (restart: orbal-net serve --token {st.get('orbal_net_token','?')} "
-                   f"--port <port-from-url> --db {os.path.join(MISSIONS_ROOT, feature, 'orbal-net.db')})")
+    if st.get("orbal_net_shared"):
+        # Shared server: no pid of ours to check - bob's L1 launcher owns its
+        # lifecycle (`bob status` / `bob server-down`). Assume reachable; the
+        # agents/rooms query below reports failure on its own if it isn't.
+        alive = True
+        out.append(f"  orbal-net server: SHARED {st.get('orbal_net_url','?')} (not owned by this mission)")
+    else:
+        pid = st.get("orbal_net_pid")
+        alive = bool(pid) and _pid_alive(pid)
+        out.append(f"  orbal-net server: pid {pid} {'ALIVE' if alive else 'DEAD'}  {st.get('orbal_net_url','?')}")
+        if not alive:
+            out.append(f"    (restart: orbal-net serve --token {st.get('orbal_net_token','?')} "
+                       f"--port <port-from-url> --db {os.path.join(MISSIONS_ROOT, feature, 'orbal-net.db')})")
 
     if SANDBOX:
         rows = subprocess.run(["container", "list"], capture_output=True, text=True).stdout.splitlines()
@@ -1046,6 +1097,113 @@ def selfcheck():
     print("selfcheck ok")
 
 
+def _live_orbal_net_serve_pids():
+    """Linux-only best-effort scan for live `orbal-net serve` processes, used to
+    assert selfcheck_live's shared path spawns none. Empty (skip that assertion)
+    off Linux - this is a dev-machine self-test, not the cross-platform proc_kill
+    used by bin/bob/eve-server.sh."""
+    if not os.path.isdir("/proc"):
+        return set()
+    pids = set()
+    for p in os.listdir("/proc"):
+        if not p.isdigit():
+            continue
+        try:
+            cmd = open(f"/proc/{p}/cmdline", "rb").read().replace(b"\0", b" ").decode()
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        if "orbal-net serve" in cmd:
+            pids.add(p)
+    return pids
+
+
+def selfcheck_live():
+    """Opt-in ~3-5s LIVE proof of the shared-server additive path (gap #1):
+    spins real throwaway `orbal-net serve` processes and exercises both
+    orbal_net_up branches plus down()'s shared room-retirement against them
+    over real HTTP. Separate from selfcheck() (which stays pure in-memory,
+    subprocess-free) because this needs `orbal-net` on PATH and real wall-clock
+    time; run explicitly with `spawn.py selfcheck-live`.
+    """
+    _ensure_orbal_net()
+    feature_a, feature_b = "selfcheck-live-a", "selfcheck-live-b"
+    for f in (feature_a, feature_b):
+        shutil.rmtree(os.path.join(MISSIONS_ROOT, f), ignore_errors=True)
+
+    # --- PATH A: ORBAL_NET_SHARED_* preset -> orbal_net_up must NOT Popen a new
+    # server, and must record the shared url/token/flag with no pid. ---------
+    state_dir = os.path.join(MISSIONS_ROOT, feature_a)
+    os.makedirs(state_dir, exist_ok=True)
+    shared_token = secrets.token_hex(16)
+    shared_log = os.path.join(state_dir, "shared-server.log")
+    shared_proc = subprocess.Popen(
+        ["orbal-net", "serve", "--token", shared_token, "--db", os.path.join(state_dir, "shared.db")],
+        stdout=open(shared_log, "w"), stderr=subprocess.STDOUT)
+    try:
+        shared_url = f"http://127.0.0.1:{_read_port(shared_log, shared_proc)}"
+        os.environ["ORBAL_NET_SHARED_URL"] = shared_url
+        os.environ["ORBAL_NET_SHARED_TOKEN"] = shared_token
+        before = _live_orbal_net_serve_pids()
+        returned_url = orbal_net_up(feature_a)
+        after = _live_orbal_net_serve_pids()
+        assert returned_url == shared_url, f"expected shared url returned, got {returned_url!r}"
+        assert after == before, f"orbal_net_up spawned a NEW server on the shared path: {after - before}"
+        st = _load_state(feature_a)
+        assert st.get("orbal_net_shared") is True, f"orbal_net_shared not recorded: {st}"
+        assert st.get("orbal_net_url") == shared_url and st.get("orbal_net_token") == shared_token
+        assert "orbal_net_pid" not in st, f"shared path must NOT record a pid: {st}"
+        print("selfcheck-live PATH A (shared preset): PASS - no Popen, shared url+token+flag recorded, no pid")
+
+        # --- shared down(): mission room (orchestrator-owned) + a lead's squad
+        # room (LEAD-owned, as real bootstrap creates it) both retired as their
+        # actual owner; the shared server itself survives. ---------------------
+        _save_state(feature_a, roles={
+            "lead-x": {"pane": "p1", "parent": "orchestrator", "harness": "claude"},
+            "worker-y": {"pane": "p2", "parent": "lead-x", "harness": "claude"},
+        })
+        orbal_net_post(feature_a, "orchestrator", "create-room", name=f"mission-{feature_a}")
+        orbal_net_post(feature_a, "lead-x", "create-room", name="squad-lead-x")
+        _retire_shared_rooms(feature_a, _load_state(feature_a))
+        remaining = {r["name"] for r in orbal_net_post(feature_a, "orchestrator", "rooms").get("rooms", [])}
+        assert remaining == set(), f"expected mission+squad rooms retired, got {remaining}"
+        assert shared_proc.poll() is None, "shared server must survive its own mission's teardown"
+        print("selfcheck-live PATH shared-down: PASS - mission+lead-squad rooms destroyed as their "
+              "owners, shared server left running")
+    finally:
+        os.environ.pop("ORBAL_NET_SHARED_URL", None)
+        os.environ.pop("ORBAL_NET_SHARED_TOKEN", None)
+        shared_proc.terminate()
+        try:
+            shared_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            shared_proc.kill()
+        shutil.rmtree(state_dir, ignore_errors=True)
+
+    # --- PATH B: no SHARED vars -> legacy per-mission Popen, byte-for-byte
+    # unchanged - real server, pid recorded + alive, url reachable. -----------
+    url = orbal_net_up(feature_b)
+    st = _load_state(feature_b)
+    pid = st.get("orbal_net_pid")
+    try:
+        assert st.get("orbal_net_shared") is None, f"legacy path must not set orbal_net_shared: {st}"
+        assert pid, f"legacy path must record a pid: {st}"
+        assert _pid_alive(pid), "legacy path's spawned server pid is not alive"
+        try:
+            urllib.request.urlopen(url, timeout=2)
+        except urllib.error.HTTPError as e:
+            assert e.code == 401, f"expected reachable-but-unauthenticated (401), got {e.code}"
+        print(f"selfcheck-live PATH B (legacy, no shared vars): PASS - Popen'd real server, "
+              f"pid {pid} alive, {url} reachable")
+    finally:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, TypeError):
+            pass
+        shutil.rmtree(os.path.join(MISSIONS_ROOT, feature_b), ignore_errors=True)
+
+    print("selfcheck-live ok")
+
+
 if __name__ == "__main__":
     args = sys.argv[1:]
     if args[:1] == ["up"] and len(args) in (2, 3):
@@ -1060,5 +1218,7 @@ if __name__ == "__main__":
         down(args[1])
     elif args == ["selfcheck"]:
         selfcheck()
+    elif args == ["selfcheck-live"]:
+        selfcheck_live()
     else:
         sys.exit(__doc__)
