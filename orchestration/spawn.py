@@ -77,7 +77,9 @@ SUBMIT_TIMEOUT_MS = "15000"  # how long to wait for an injected prompt to start 
 # granularity). Agents attach as `container exec` processes, so herdr's PTY
 # (banner match + send-keys) works unchanged; coordination is the host orbal-net
 # server reached over TCP with the `orbal-net` CLI (ORBAL_NET_* env injected per exec).
-# Default ON; BOTFILE_NO_SANDBOX=1 runs bare on the host (debugging only).
+# Default ON; BOTFILE_NO_SANDBOX=1 runs bare on the host (debugging only - see
+# _verify_bare_mode_supported: claude/codex first-run prompts are only pre-answered
+# inside the microVM, so a real bare-mode fleet with either harness cannot boot).
 # See .botfile/memory/tools/sandbox.md and sandbox/build.sh.
 SANDBOX = os.environ.get("BOTFILE_NO_SANDBOX") != "1"
 CONTAINER_IMAGE = "botfiles-agent"
@@ -821,10 +823,44 @@ def _reset_mission_state(feature):
             pass
 
 
+# claude/codex both block on un-pre-answered first-run prompts (claude: theme /
+# folder-trust / bypass-mode; codex: folder-trust) - mission_up's CLAUDE_SEED /
+# CODEX_SEED only run inside the per-mission microVM (SANDBOX). Bare mode
+# (BOTFILE_NO_SANDBOX=1) has no equivalent pre-answer step, so a claude/codex pane
+# never reaches its ready banner and `up` times out after READY_TIMEOUT_MS per pane,
+# then auto-tears-down the partial fleet (gap #7). Bare mode is debug-only by design
+# (see the SANDBOX comment above); fail fast here instead of burning that timeout on
+# a run that cannot succeed. `pi` has no known first-run gate, so a pi-only bare
+# roster is unaffected.
+UNSEEDED_HARNESSES_BARE = {"claude", "codex"}
+
+
+def _verify_bare_mode_supported(roster, leads):
+    """Exit loud, before anything is started, if a bare-mode `up` would spawn a
+    harness whose first-run prompts are only pre-answered inside the SANDBOX."""
+    if SANDBOX:
+        return
+    spawned = {l["role"] for l in leads}
+    spawned |= {r["role"] for r in roster["roles"] if r["parent"] in spawned}
+    blocked = sorted({r["harness"] for r in roster["roles"] if r["role"] in spawned} & UNSEEDED_HARNESSES_BARE)
+    if blocked:
+        sys.exit(
+            f"BOTFILE_NO_SANDBOX=1 (bare/local mode) does not pre-answer "
+            f"{'/'.join(blocked)}'s first-run prompts (mission_up's CLAUDE_SEED/"
+            f"CODEX_SEED only run inside the per-mission SANDBOX) - a bare "
+            f"{'/'.join(blocked)} pane would hang and this run would time out. "
+            f"Bare mode is debug-only and unsupported for a real fleet; drop "
+            f"BOTFILE_NO_SANDBOX (use SANDBOX) or restrict this roster to harnesses "
+            f"with no first-run gate (e.g. pi)."
+        )
+
+
 def up(roster_path, only=None):
     roster = json.load(open(roster_path))
     validate(roster)
     feature, repo = roster["feature"], roster["repo"]
+    leads = select_leads(roster, only)
+    _verify_bare_mode_supported(roster, leads)  # fail loud before any side effect starts
     _reset_mission_state(feature)
 
     panes = {}
@@ -851,7 +887,6 @@ def up(roster_path, only=None):
         root_tab = ws["result"]["tab"]["tab_id"]
         root_pane = ws["result"]["root_pane"]["pane_id"]
 
-        leads = select_leads(roster, only)
         for i, lead in enumerate(leads):
             if i == 0:  # reuse the workspace's default tab for the first lead
                 herdr("tab", "rename", root_tab, lead["role"])
@@ -1006,6 +1041,7 @@ def status(feature):
 
 
 def selfcheck():
+    global SANDBOX
     ok = {"feature": "t", "repo": "/tmp", "roles": [
         {"role": "lead", "parent": "orchestrator", "harness": "claude", "model": "x"},
         {"role": "w1", "parent": "lead", "harness": "codex", "model": "x"},
@@ -1094,6 +1130,32 @@ def selfcheck():
     # connector status is a no-op line when the mission has no eve connector
     assert orbal_net_connector_status("t", {}) is None
     assert orbal_net_connector_status("t", {"eve_connector": None}) is None
+
+    # bare-mode guard (gap #7): claude/codex first-run prompts are only
+    # pre-answered inside the SANDBOX (mission_up's CLAUDE_SEED/CODEX_SEED), so a
+    # bare fleet spawning either must fail fast instead of hanging on
+    # READY_TIMEOUT_MS per pane. Toggle the module-level SANDBOX flag directly
+    # (mirrors how _verify_bare_mode_supported reads it at call time).
+    saved_sandbox = SANDBOX
+    try:
+        SANDBOX = False
+        bare_claude = {"feature": "t", "repo": "/tmp", "roles": [
+            {"role": "lead", "parent": "orchestrator", "harness": "claude", "model": "x"},
+        ]}
+        try:
+            _verify_bare_mode_supported(bare_claude, select_leads(bare_claude))
+            assert False, "bare mode + claude should exit"
+        except SystemExit:
+            pass
+        # pi has no known first-run gate, so a pi-only bare roster is unaffected
+        bare_pi = {"feature": "t", "repo": "/tmp", "roles": [
+            {"role": "lead", "parent": "orchestrator", "harness": "pi", "model": "x"},
+        ]}
+        _verify_bare_mode_supported(bare_pi, select_leads(bare_pi))
+    finally:
+        SANDBOX = saved_sandbox
+    # SANDBOX mode never blocks, regardless of harness (pre-answered inside the VM)
+    _verify_bare_mode_supported(ok, select_leads(ok))
     print("selfcheck ok")
 
 
