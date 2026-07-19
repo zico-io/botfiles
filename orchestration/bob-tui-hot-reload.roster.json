@@ -1,0 +1,7 @@
+{
+  "feature": "bob-tui-hot-reload",
+  "repo": "/Users/percules/dev/bob",
+  "roles": [
+    {"role": "tui-dev-lead", "parent": "orchestrator", "harness": "claude", "model": "opus"}
+  ]
+}

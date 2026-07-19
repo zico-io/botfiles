@@ -1,0 +1,11 @@
+{
+  "feature": "monkey-multi-tenant",
+  "repo": "/Users/percules/dev/monkeys",
+  "roles": [
+    {"role": "monkey-lead",       "parent": "orchestrator", "harness": "codex",  "model": "gpt-5.5"},
+    {"role": "worker-tenancy",    "parent": "monkey-lead",   "harness": "claude", "model": "sonnet"},
+    {"role": "worker-auth-quota", "parent": "monkey-lead",   "harness": "claude", "model": "sonnet"},
+    {"role": "web-lead",          "parent": "orchestrator", "harness": "codex",  "model": "gpt-5.5"},
+    {"role": "worker-web",        "parent": "web-lead",      "harness": "claude", "model": "sonnet"}
+  ]
+}

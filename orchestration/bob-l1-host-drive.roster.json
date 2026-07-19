@@ -1,0 +1,9 @@
+{
+  "feature": "bob-l1-host-drive",
+  "repo": "/Users/percules/dev/bob",
+  "roles": [
+    {"role": "drive-lead",       "parent": "orchestrator", "harness": "claude", "model": "opus"},
+    {"role": "worker-tui",       "parent": "drive-lead",   "harness": "claude", "model": "sonnet"},
+    {"role": "worker-plumbing",  "parent": "drive-lead",   "harness": "claude", "model": "sonnet"}
+  ]
+}

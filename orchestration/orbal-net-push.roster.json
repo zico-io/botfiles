@@ -1,0 +1,9 @@
+{
+  "feature": "orbal-net-push",
+  "repo": "/Users/percules/dev/orbal-net",
+  "roles": [
+    {"role": "push-lead",     "parent": "orchestrator", "harness": "claude", "model": "opus"},
+    {"role": "worker-server", "parent": "push-lead",    "harness": "claude", "model": "sonnet"},
+    {"role": "worker-client", "parent": "push-lead",    "harness": "claude", "model": "sonnet"}
+  ]
+}

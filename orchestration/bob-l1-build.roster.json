@@ -1,0 +1,12 @@
+{
+  "feature": "bob-l1-build",
+  "repo": "/Users/percules/dev/bob",
+  "roles": [
+    {"role": "runtime-lead",    "parent": "orchestrator",  "harness": "claude", "model": "opus"},
+    {"role": "worker-session",  "parent": "runtime-lead",  "harness": "claude", "model": "sonnet"},
+    {"role": "worker-connector","parent": "runtime-lead",  "harness": "claude", "model": "sonnet"},
+    {"role": "tooling-lead",    "parent": "orchestrator",  "harness": "claude", "model": "opus"},
+    {"role": "worker-tools",    "parent": "tooling-lead",  "harness": "claude", "model": "sonnet"},
+    {"role": "worker-skills",   "parent": "tooling-lead",  "harness": "claude", "model": "sonnet"}
+  ]
+}

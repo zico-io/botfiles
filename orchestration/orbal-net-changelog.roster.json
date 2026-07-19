@@ -1,0 +1,9 @@
+{
+  "feature": "orbal-net-changelog",
+  "repo": "/Users/percules/dev/orbal-net",
+  "roles": [
+    {"role": "release-lead",     "parent": "orchestrator",  "harness": "claude", "model": "opus"},
+    {"role": "worker-pipeline",  "parent": "release-lead",   "harness": "claude", "model": "sonnet"},
+    {"role": "worker-changelog", "parent": "release-lead",   "harness": "claude", "model": "sonnet"}
+  ]
+}

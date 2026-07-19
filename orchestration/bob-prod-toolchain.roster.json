@@ -1,0 +1,11 @@
+{
+  "feature": "bob-prod-toolchain",
+  "repo": "/Users/percules/dev/bob",
+  "roles": [
+    {"role": "quality-lead",       "parent": "orchestrator",  "harness": "claude", "model": "opus"},
+    {"role": "worker-lint",        "parent": "quality-lead",  "harness": "claude", "model": "sonnet"},
+    {"role": "worker-ci-coverage", "parent": "quality-lead",  "harness": "claude", "model": "sonnet"},
+    {"role": "docs-lead",          "parent": "orchestrator",  "harness": "claude", "model": "opus"},
+    {"role": "worker-docs",        "parent": "docs-lead",     "harness": "claude", "model": "sonnet"}
+  ]
+}

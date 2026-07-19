@@ -1,0 +1,9 @@
+{
+  "feature": "orbal-net-release",
+  "repo": "/Users/percules/.botfiles",
+  "roles": [
+    {"role": "release-lead",   "parent": "orchestrator",  "harness": "claude", "model": "opus"},
+    {"role": "worker-cicd",    "parent": "release-lead",   "harness": "claude", "model": "sonnet"},
+    {"role": "worker-rebrand", "parent": "release-lead",   "harness": "claude", "model": "sonnet"}
+  ]
+}

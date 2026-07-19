@@ -1,0 +1,9 @@
+{
+  "feature": "bob-coding-tools",
+  "repo": "/Users/percules/dev/bob",
+  "roles": [
+    {"role": "lead-bob",         "parent": "orchestrator", "harness": "claude", "model": "opus"},
+    {"role": "worker-tools-fs",  "parent": "lead-bob",     "harness": "claude", "model": "sonnet"},
+    {"role": "worker-tools-git", "parent": "lead-bob",     "harness": "claude", "model": "sonnet"}
+  ]
+}

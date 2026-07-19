@@ -1,0 +1,9 @@
+{
+  "feature": "bob-orchestrator",
+  "repo": "/Users/percules/.botfiles",
+  "roles": [
+    {"role": "rfc-lead",             "parent": "orchestrator", "harness": "claude", "model": "opus"},
+    {"role": "worker-eve",           "parent": "rfc-lead",     "harness": "claude", "model": "sonnet"},
+    {"role": "worker-orchestration", "parent": "rfc-lead",     "harness": "claude", "model": "sonnet"}
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "feature": "bob-l1-spike",
+  "repo": "/Users/percules/dev/bob-l1",
+  "roles": [
+    {"role": "spike-lead",      "parent": "orchestrator", "harness": "claude", "model": "opus"},
+    {"role": "worker-durable",  "parent": "spike-lead",   "harness": "claude", "model": "sonnet"},
+    {"role": "worker-multiplex","parent": "spike-lead",   "harness": "claude", "model": "sonnet"}
+  ]
+}

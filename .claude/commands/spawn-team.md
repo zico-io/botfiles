@@ -37,9 +37,10 @@ interviews the human, writes `orchestration/<feature>.brief.md`, and drafts this
    `orbal-net join` auto-creates rooms on demand; either way you are the mission-room
    owner if you create it first.
 
-3. **Wait for the fleet to check in.** Poll `orbal-net read mission-<feature>` (or
-   `orbal-net inbox`) until every lead has announced ready (leads relay their own
-   workers' readiness). `orbal-net agents` shows who has registered.
+3. **Wait for the fleet to check in.** Poll `orbal-net peek mission-<feature>` until
+   every lead has announced ready (leads relay their own workers' readiness).
+   `orbal-net agents` shows who has registered. Monitor with `peek` (non-consuming),
+   never `read` - `read` advances your cursor and eats messages the agents still need.
 
 4. **Drive.** Post each task to the relevant lead with
    `orbal-net send mission-<feature> <task>`. Leads own their `squad-<lead>` room and
@@ -47,7 +48,15 @@ interviews the human, writes `orchestration/<feature>.brief.md`, and drafts this
    boundary is the 3-layer rule). Agents don't get pushed messages, so after
    posting a task wake the target: `python3 orchestration/spawn.py poke <feature>
    <role>`. Monitor with `herdr wait agent-status <pane> --status done` (panes
-   from the map) and `orbal-net read`. Use `orbal-net dm <agent> ...` only to escalate.
+   from the map) and `orbal-net peek` / `orbal-net events` (both non-consuming - do
+   not use `read` to monitor). Use `orbal-net dm <agent> ...` only to escalate.
+
+   **GitHub bridge.** Spawned agents have no `gh`/network and their clone's origin is a
+   local mirror, so the orchestrator bridges every live GitHub step (push, PR, release
+   edits, repo settings). Have agents *prepare* GitHub artifacts as files/text and
+   execute them yourself. To ship a mission branch as a PR, use
+   `python3 orchestration/spawn.py bridge-pr <feature> [title]` (pushes
+   `mission-<feature>` to the real remote and opens the PR via `gh`).
 
 5. **Tear down** when the mission is complete:
    `python3 orchestration/spawn.py down <feature>` — this kills the orbal-net server

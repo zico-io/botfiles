@@ -1,0 +1,8 @@
+{
+  "feature": "tui-chat-redesign",
+  "repo": "/Users/percules/dev/bob",
+  "roles": [
+    {"role": "tui-design-lead", "parent": "orchestrator", "harness": "claude", "model": "opus"},
+    {"role": "worker-tui", "parent": "tui-design-lead", "harness": "claude", "model": "sonnet"}
+  ]
+}

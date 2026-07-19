@@ -8,6 +8,7 @@ with persistent, portable memory.
 - **Distilled, not raw.** Store extracted facts (source + date + why), never
   conversation transcripts.
 - **Provenance required.** Every fact carries `<source: …, date>`.
+- **Good code is self documenting.** Code comments should only exist to explain things not immediately obvious or to document public API.
 - **Upsert, not append-only.** Update and delete are allowed; stale facts get
   corrected, not accumulated.
 - **No em dashes.** Use a plain dash "-" instead of "—".

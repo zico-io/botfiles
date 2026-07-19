@@ -41,7 +41,10 @@ if command -v cargo >/dev/null 2>&1; then
   elif cargo install --quiet orbal-net || cargo install --quiet --git https://github.com/zico-io/orbal-net orbal-net; then
     echo "installed orbal-net -> $(command -v orbal-net)"
   else
-    echo "note: orbal-net install failed (tried crates.io and git; install manually)"
+    echo "orbal-net install FAILED (tried crates.io and git)." >&2
+    echo "This is fatal: agents reach the mission server via this binary, and a" >&2
+    echo "missing image binary makes them recompile it from the mission repo at join." >&2
+    exit 1
   fi
 else
   echo "note: cargo not found — install Rust (https://rustup.rs) to install the orbal-net binary"

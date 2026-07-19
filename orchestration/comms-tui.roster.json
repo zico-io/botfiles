@@ -1,0 +1,9 @@
+{
+  "feature": "comms-tui",
+  "repo": "/Users/percules/.botfiles",
+  "roles": [
+    {"role": "tui-lead",    "parent": "orchestrator", "harness": "claude", "model": "opus"},
+    {"role": "worker-core", "parent": "tui-lead",     "harness": "claude", "model": "sonnet"},
+    {"role": "worker-ui",   "parent": "tui-lead",     "harness": "claude", "model": "sonnet"}
+  ]
+}

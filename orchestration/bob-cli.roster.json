@@ -1,0 +1,9 @@
+{
+  "feature": "bob-cli",
+  "repo": "/Users/percules/.botfiles",
+  "roles": [
+    {"role": "rfc-lead",          "parent": "orchestrator", "harness": "claude", "model": "opus"},
+    {"role": "worker-packaging",  "parent": "rfc-lead",     "harness": "claude", "model": "sonnet"},
+    {"role": "worker-ux",         "parent": "rfc-lead",     "harness": "claude", "model": "sonnet"}
+  ]
+}

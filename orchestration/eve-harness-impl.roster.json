@@ -1,0 +1,9 @@
+{
+  "feature": "eve-harness-impl",
+  "repo": "/Users/percules/dev/eve-harness",
+  "roles": [
+    {"role": "poc-lead",          "parent": "orchestrator", "harness": "claude", "model": "opus"},
+    {"role": "worker-connector",  "parent": "poc-lead",     "harness": "claude", "model": "sonnet"},
+    {"role": "worker-eve-runtime","parent": "poc-lead",     "harness": "claude", "model": "sonnet"}
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "feature": "bob-l1-approval-fix",
+  "repo": "/Users/percules/dev/bob",
+  "roles": [
+    {"role": "fix-lead",     "parent": "orchestrator", "harness": "claude", "model": "opus"},
+    {"role": "worker-gate",  "parent": "fix-lead",     "harness": "claude", "model": "sonnet"},
+    {"role": "worker-proof", "parent": "fix-lead",     "harness": "claude", "model": "sonnet"}
+  ]
+}

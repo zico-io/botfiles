@@ -1,0 +1,7 @@
+{
+  "feature": "bob-cli-lockfile",
+  "repo": "/Users/percules/dev/bob",
+  "roles": [
+    {"role": "lockfile-lead", "parent": "orchestrator", "harness": "claude", "model": "sonnet"}
+  ]
+}

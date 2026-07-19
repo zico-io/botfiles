@@ -1,0 +1,9 @@
+{
+  "feature": "bob-l1-host-wiring",
+  "repo": "/Users/percules/dev/bob",
+  "roles": [
+    {"role": "host-lead",          "parent": "orchestrator", "harness": "claude", "model": "opus"},
+    {"role": "worker-server",      "parent": "host-lead",    "harness": "claude", "model": "sonnet"},
+    {"role": "worker-portability", "parent": "host-lead",    "harness": "claude", "model": "sonnet"}
+  ]
+}

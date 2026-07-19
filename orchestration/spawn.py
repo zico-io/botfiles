@@ -65,7 +65,7 @@ HARNESSES = {
     "eve":    {"cmd": EVE_START_CMD, "ready": "server listening at http://127.0.0.1:3000/", "working": None},
 }
 
-READY_TIMEOUT_MS = "90000"  # ponytail: cold microVM start; raise if the VM/host gets slower
+READY_TIMEOUT_MS = os.environ.get("MISSION_READY_TIMEOUT_MS", "90000")  # ponytail: cold microVM start; raise via env if the VM/host gets slower (e.g. many heavy codex TUIs in one VM)
 # The eve pane runs `npm ci` + `npx eve build` before `eve start` serves (a fresh
 # mission clone has no node_modules/.output, both gitignored), which can exceed the
 # generic ready timeout. Give the eve pane its own longer ceiling. ponytail: raise

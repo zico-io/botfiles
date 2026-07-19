@@ -1,0 +1,11 @@
+{
+  "feature": "eve-first-milestone",
+  "repo": "/Users/percules/dev/monkeys",
+  "roles": [
+    {"role": "agent-lead",     "parent": "orchestrator", "harness": "claude", "model": "opus"},
+    {"role": "worker-runtime", "parent": "agent-lead",    "harness": "claude", "model": "sonnet"},
+    {"role": "worker-platform","parent": "agent-lead",    "harness": "claude", "model": "sonnet"},
+    {"role": "cli-lead",       "parent": "orchestrator", "harness": "claude", "model": "opus"},
+    {"role": "worker-cli",     "parent": "cli-lead",      "harness": "claude", "model": "sonnet"}
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "feature": "bob-release-tooling",
+  "repo": "/Users/percules/dev/bob",
+  "roles": [
+    {"role": "release-lead", "parent": "orchestrator", "harness": "claude", "model": "opus"},
+    {"role": "worker-ci",    "parent": "release-lead",  "harness": "claude", "model": "sonnet"}
+  ]
+}

@@ -3,10 +3,18 @@ description: Interview the human to scope an ambiguous mission, then write its b
 argument-hint: <feature>
 ---
 
-You are the **orchestrator** (layer 1). The human has a mission whose feature name is
-`$ARGUMENTS`, but the task is under-specified. Before any fleet spawns, your job is to
-turn it into a well-scoped **brief** and a **roster** - the mission's guiding light.
-Do not spawn anything here; this command only produces the two artifacts.
+You are the **orchestrator** (layer 1). The human described a mission as `$ARGUMENTS`,
+but the task is under-specified. Before any fleet spawns, your job is to turn it into a
+well-scoped **brief** and a **roster** - the mission's guiding light. Do not spawn
+anything here; this command only produces the two artifacts.
+
+First, derive a short kebab-case **`<feature>` slug** from `$ARGUMENTS` (lowercase; spaces
+and punctuation -> `-`; collapse repeats; drop filler so it stays short, e.g. "full release
+note and changelog automation for the orbal-net crate" -> `orbal-net-changelog`). Use
+`<feature>` for the roster `feature` field, the `mission-<feature>` room, and every filename
+below - never the raw phrase (it has spaces). Keep the full `$ARGUMENTS` phrase as the
+brief's "Long name" line so intent is preserved. If `$ARGUMENTS` is already a clean slug,
+use it as-is.
 
 Work collaboratively - interview, do not dictate. Use `AskUserQuestion` to gather each
 dimension below, one focused question (or a small batch) at a time. Default sensibly
@@ -33,11 +41,13 @@ Cover these dimensions (skip any the human has already made clear):
 
 ## 2. Write the brief
 
-Write `orchestration/$ARGUMENTS.brief.md` (plain markdown, no provenance footer - it is
+Write `orchestration/<feature>.brief.md` (plain markdown, no provenance footer - it is
 a work artifact, not a memory fact; no em dashes, use `-`). One section per dimension:
 
 ```markdown
 # Mission brief: <feature>
+
+Long name: "$ARGUMENTS"
 
 ## Goal
 ...
@@ -69,11 +79,16 @@ a work artifact, not a memory fact; no em dashes, use `-`). One section per dime
 each lead reads and relays it to its squad - so write it to be read cold by an agent with
 no other context.
 
+If the mission ships to a GitHub repo, add a Constraints line: spawned agents have no
+`gh`/network and their clone's origin is a local mirror, so the orchestrator bridges all
+live GitHub steps (push + PR via `spawn.py bridge-pr <feature>`, release edits, repo
+settings) - agents *prepare* those artifacts as files/text for the orchestrator to execute.
+
 Right after writing the brief, open it in a live editor pane so the human can edit it
 directly instead of dictating every change through chat:
 
 ```
-python3 orchestration/plan_pane.py open orchestration/$ARGUMENTS.brief.md
+python3 orchestration/plan_pane.py open orchestration/<feature>.brief.md
 ```
 
 This splits a right-hand herdr pane running the human's Helix (`hx`) on the brief without
@@ -88,7 +103,7 @@ pane, and pushes selections to you with the Helix keybind (see
 `orchestration/plan_pane.py install-keybind`). The pane never interrupts you - it is
 passive until your turn. So **before composing each response**, do two cheap checks:
 
-1. **Pick up saves.** Re-read `orchestration/$ARGUMENTS.brief.md` (its mtime changes on
+1. **Pick up saves.** Re-read `orchestration/<feature>.brief.md` (its mtime changes on
    `:w`). If the human changed it, treat the file on disk as the source of truth, fold
    their edits into your understanding, and do not clobber them - your next write must
    build on their version, not overwrite it.
@@ -110,7 +125,7 @@ so the human sees them appear in the pane.
 
 ## 4. Draft the roster
 
-Write `orchestration/$ARGUMENTS.roster.json` from the team plan, matching
+Write `orchestration/<feature>.roster.json` from the team plan, matching
 `orchestration/roster.example.json`:
 
 ```json
@@ -124,7 +139,7 @@ Write `orchestration/$ARGUMENTS.roster.json` from the team plan, matching
 }
 ```
 
-Rules: `feature` must equal `$ARGUMENTS`. Every lead has `parent: "orchestrator"`; every
+Rules: `feature` must equal the `<feature>` slug. Every lead has `parent: "orchestrator"`; every
 worker's `parent` is its lead's `role`; max 3 layers, workers are leaves. Defaults when
 the human did not specify: `harness: "claude"`, lead `model: "opus"`, worker
 `model: "sonnet"`. If the file already exists, update it rather than clobbering unrelated
@@ -141,5 +156,5 @@ python3 orchestration/plan_pane.py close <pane-id>
 ```
 
 Then finish by telling the human the two files are written and pointing them at:
-`/spawn-team orchestration/$ARGUMENTS.roster.json` (run from inside herdr). Remind them
+`/spawn-team orchestration/<feature>.roster.json` (run from inside herdr). Remind them
 `up` will auto-post the brief into the mission room - no manual step.
