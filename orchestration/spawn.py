@@ -16,6 +16,7 @@ Usage:
   python3 spawn.py poke <feature> <role> [msg] # wake an idle agent (orbal-net nudges don't auto-submit)
   python3 spawn.py status <feature>            # mission health: server, container, agents, rooms
   python3 spawn.py bridge-pr <feature> [title] # push mission-<feature> to origin + open a PR via gh
+  python3 spawn.py bridge-issue <feature> <bug|feature|chore> <title> [desc] # file a labelled Linear issue
   python3 spawn.py down <feature>              # tears down squad rooms + closes the workspace
   python3 spawn.py selfcheck                   # asserts the layer/hierarchy rules
 
@@ -211,6 +212,89 @@ def bridge_pr(feature, title=None):
         sys.exit(f"git push of {branch} to origin failed")
     if subprocess.run(_pr_cmd(branch, title), cwd=repo).returncode != 0:
         sys.exit("gh pr create failed (already open? see `gh pr list`)")
+
+
+LINEAR_API = "https://api.linear.app/graphql"
+
+
+def _linear_gql(query, variables):
+    """POST a GraphQL request to Linear and return `data`, exiting on any failure.
+
+    Auth is a Linear bot key in LINEAR_API_KEY (personal-key style: the raw key in
+    the Authorization header, no `Bearer`). Only the orchestrator ever holds it —
+    spawned agents have no network or creds, same trust boundary as `gh` in bridge_pr.
+    A GraphQL 200 with a top-level `errors` array is still a failure.
+    """
+    key = os.environ.get("LINEAR_API_KEY")
+    if not key:
+        sys.exit("LINEAR_API_KEY not set (use a dedicated Linear bot key; agents never get it)")
+    body = json.dumps({"query": query, "variables": variables}).encode()
+    req = urllib.request.Request(LINEAR_API, data=body, method="POST",
+                                 headers={"Authorization": key, "Content-Type": "application/json"})
+    try:
+        resp = json.load(urllib.request.urlopen(req, timeout=15))
+    except urllib.error.HTTPError as e:
+        sys.exit(f"Linear API HTTP {e.code}: {e.read().decode(errors='replace')}")
+    if resp.get("errors"):
+        sys.exit(f"Linear API error: {json.dumps(resp['errors'])}")
+    return resp["data"]
+
+
+ISSUE_LABELS = ("bug", "feature", "chore")
+
+
+def _issue_input(team_id, title, description, label_ids=None):
+    """Build the issueCreate input. Pure (selfcheck-testable)."""
+    inp = {"teamId": team_id, "title": title, "description": description}
+    if label_ids:
+        inp["labelIds"] = label_ids
+    return inp
+
+
+def _label_id(team_id, label):
+    """Resolve a label name to its id within the team, creating it if absent.
+
+    Only the fixed ISSUE_LABELS set reaches here (bridge_issue validates first), so
+    auto-create can never spawn junk labels. A workspace-level label (no team) applies
+    to every team, so it counts as a match too.
+    """
+    nodes = _linear_gql(
+        "query($n:String!){issueLabels(filter:{name:{eqIgnoreCase:$n}}){nodes{id team{id}}}}",
+        {"n": label})["issueLabels"]["nodes"]
+    for n in nodes:
+        team = n.get("team")
+        if team is None or team.get("id") == team_id:
+            return n["id"]
+    return _linear_gql(
+        "mutation($i:IssueLabelCreateInput!){issueLabelCreate(input:$i){issueLabel{id}}}",
+        {"i": {"name": label, "teamId": team_id}})["issueLabelCreate"]["issueLabel"]["id"]
+
+
+def bridge_issue(feature, label, title, description=None):
+    """File a labelled Linear issue for a mission and print its identifier + URL.
+
+    Mirrors bridge_pr: workers prepare the issue text, the orchestrator (holding the
+    Linear bot key) files it. `label` types the work (bug/feature/chore). Team key comes
+    from LINEAR_TEAM_KEY (e.g. ROG); the mission feature is appended to the body so the
+    issue is traceable to its fleet.
+    """
+    if label not in ISSUE_LABELS:
+        sys.exit(f"label must be one of: {', '.join(ISSUE_LABELS)}")
+    team_key = os.environ.get("LINEAR_TEAM_KEY")
+    if not team_key:
+        sys.exit("LINEAR_TEAM_KEY not set (the team's key prefix, e.g. ROG)")
+    nodes = _linear_gql("query($k:String!){teams(filter:{key:{eq:$k}}){nodes{id}}}",
+                        {"k": team_key})["teams"]["nodes"]
+    if not nodes:
+        sys.exit(f"no Linear team with key {team_key!r} (check LINEAR_TEAM_KEY and the bot key's access)")
+    team_id = nodes[0]["id"]
+    label_id = _label_id(team_id, label)
+    body = f"{description}\n\n" if description else ""
+    issue = _linear_gql(
+        "mutation($i:IssueCreateInput!){issueCreate(input:$i){issue{identifier url}}}",
+        {"i": _issue_input(team_id, title, f"{body}Mission: `{feature}`.", [label_id])}
+    )["issueCreate"]["issue"]
+    print(f"{issue['identifier']}  {issue['url']}")
 
 
 def mission_secrets(feature):
@@ -1114,6 +1198,11 @@ def selfcheck():
     assert _pr_cmd("mission-f", None)[-1] == "--fill" and "mission-f" in _pr_cmd("mission-f", None)
     assert "--title" in _pr_cmd("mission-f", "t") and "t" in _pr_cmd("mission-f", "t")
 
+    # bridge-issue input: carries team id, title, description; labelIds only when present
+    assert _issue_input("team_x", "T", "D") == {"teamId": "team_x", "title": "T", "description": "D"}
+    assert _issue_input("team_x", "T", "D", ["l1"])["labelIds"] == ["l1"]
+    assert ISSUE_LABELS == ("bug", "feature", "chore")
+
     # eve harness: a server pane (ready on :3000, no "working" marker), launched
     # without bootstrap; its start command wipes the durable store, links the Vercel
     # TEAM scope (zico-ios-projects, not the rejected personal handle), runs eve start.
@@ -1276,6 +1365,8 @@ if __name__ == "__main__":
         status(args[1])
     elif args[:1] == ["bridge-pr"] and 2 <= len(args) <= 3:
         bridge_pr(args[1], args[2] if len(args) == 3 else None)
+    elif args[:1] == ["bridge-issue"] and 4 <= len(args) <= 5:
+        bridge_issue(args[1], args[2], args[3], args[4] if len(args) == 5 else None)
     elif args[:1] == ["down"] and len(args) == 2:
         down(args[1])
     elif args == ["selfcheck"]:
