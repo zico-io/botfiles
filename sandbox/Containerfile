@@ -49,6 +49,7 @@ RUN npm install -g \
 # `container exec`) - `cargo install` lands it in $CARGO_HOME/bin, already on
 # PATH from the Rust-toolchain step above.
 COPY AGENTS.md /opt/botfiles/AGENTS.md
+COPY skills /opt/botfiles/skills
 COPY provision.sh /opt/botfiles/provision.sh
 RUN chmod +x /opt/botfiles/provision.sh && /opt/botfiles/provision.sh
 

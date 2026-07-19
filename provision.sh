@@ -29,6 +29,22 @@ touch "$HOME/.claude/CLAUDE.md"
 grep -qxF "@$SSOT" "$HOME/.claude/CLAUDE.md" || printf '@%s\n' "$SSOT" >> "$HOME/.claude/CLAUDE.md"
 echo "ensured @import in $HOME/.claude/CLAUDE.md"
 
+# skills/: each harness discovers skills from a per-harness dir holding
+# <name>/SKILL.md subdirs. Symlink each repo skill into all three (same live-edit
+# philosophy as AGENTS.md; ln -sfn replaces the link instead of nesting on re-run).
+SKILLS_DIR="$(dirname "$SSOT")/skills"
+if [ -d "$SKILLS_DIR" ]; then
+  for harness_dir in "$HOME/.claude/skills" "$HOME/.codex/skills" "$HOME/.pi/agent/skills"; do
+    mkdir -p "$harness_dir"
+    for skill in "$SKILLS_DIR"/*/SKILL.md; do
+      [ -f "$skill" ] || continue
+      src="$(dirname "$skill")"
+      ln -sfn "$src" "$harness_dir/$(basename "$src")"
+      echo "linked $harness_dir/$(basename "$src") -> $src"
+    done
+  done
+fi
+
 # orbal-net: one Rust binary (github.com/zico-io/orbal-net) that is both the
 # per-mission server (`orbal-net serve`) and the client agents call. Install it
 # for the host and put it on the orchestrator's PATH. spawn.py's
