@@ -60,6 +60,18 @@ Spawned agents have no `gh`/network and their clone's origin is a local mirror, 
 orchestrator bridges every live GitHub step (push + PR via `spawn.py bridge-pr <feature>`,
 release edits, repo settings); agents prepare those artifacts as files/text.
 
+## Nix layer
+
+`flake.nix` pins two things: the dev toolchain (`nix develop`) and
+`nixosConfigurations.sandbox-host`, a NixOS guest on the bare-metal TrueNAS box
+that gives agents KVM microVMs over the tailnet. It is a **second** sandbox
+backend beside the macOS Apple `container` path, not a replacement. Deploy with
+`nixos-rebuild switch --flake .#sandbox-host --target-host <host>`. Disks are
+declarative (disko), secrets are sops + age with ciphertext only, and access is
+deny-by-default over Tailscale SSH. microsandbox 0.7.x is a CLI with no daemon
+or HTTP API, so there is no job endpoint to wrap yet. See
+`.botfile/memory/tools/nix.md`.
+
 ## Entity discipline
 
 Canonical records live in `.botfile/entities/entities.jsonl`, one JSON object

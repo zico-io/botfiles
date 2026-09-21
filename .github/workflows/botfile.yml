@@ -13,3 +13,24 @@ jobs:
         run: ./bin/botfile validate
       - name: budget-check
         run: ./bin/botfile budget-check
+
+  nix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v23
+      # Eval-only: building the full sandbox-host closure would take longer
+      # than the whole rest of this workflow, and an eval catches every error
+      # that is actually ours (typos, bad options, missing attrs).
+      - name: flake check
+        run: nix flake check --no-build --show-trace
+      - name: sandbox-host evaluates
+        run: |
+          nix eval --raw --show-trace \
+            .#nixosConfigurations.sandbox-host.config.system.build.toplevel.drvPath
+      - name: botfile gates as nix checks
+        run: |
+          nix build --show-trace --print-build-logs \
+            .#checks.x86_64-linux.botfile-selfcheck \
+            .#checks.x86_64-linux.botfile-validate \
+            .#checks.x86_64-linux.botfile-budget-check
