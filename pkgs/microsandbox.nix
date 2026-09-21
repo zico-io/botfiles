@@ -11,7 +11,7 @@
   stdenv,
   fetchurl,
   autoPatchelfHook,
-  libcap-ng,
+  libcap_ng,
 }:
 
 let
@@ -48,7 +48,7 @@ stdenv.mkDerivation {
 
   nativeBuildInputs = [ autoPatchelfHook ];
   buildInputs = [
-    libcap-ng
+    libcap_ng
     stdenv.cc.cc.lib
   ];
 
