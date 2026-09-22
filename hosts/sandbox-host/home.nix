@@ -2,11 +2,6 @@
 #
 # Machine-wide concerns stay in the system config; this file owns only what
 # belongs to the session an agent or a person actually works in.
-#
-# The agent CLIs themselves (claude, codex) are deliberately absent: they ship
-# as self-updating vendor binaries on a weekly cadence, so pinning them to a
-# nixpkgs revision would hold them back and add an unfree flag to the whole
-# host. `programs.nix-ld` is what makes their own installers work here.
 { pkgs, ... }:
 {
   home.stateVersion = "26.05";
@@ -42,7 +37,20 @@
 
   # git, jq, ripgrep, and tmux are system-wide already; these are the gaps an
   # agent session hits.
+  #
+  # claude-code and codex are the agents T3 Code launches over SSH. Installing
+  # them declaratively costs them their self-update: both refuse to write into
+  # the read-only store, so the version here is whatever the nixpkgs pin holds
+  # until the flake is bumped. That is the trade this host wants - a deploy is
+  # the only thing that changes what runs. `programs.nix-ld` (system config)
+  # stays as the escape hatch for running a vendor installer by hand.
+  #
+  # With useUserPackages these land in /etc/profiles/per-user/percules/bin,
+  # which is the absolute path to give T3 Code if a non-login SSH shell hands
+  # it a thin PATH.
   home.packages = with pkgs; [
+    claude-code
+    codex
     fd
     gh
   ];
