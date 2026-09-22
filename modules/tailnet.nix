@@ -55,6 +55,13 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    # Tailscale hands DNS to resolved instead of rewriting /etc/resolv.conf.
+    # Direct mode leaves MagicDNS as the only nameserver, and when tailscaled
+    # wins the boot race against DHCP it captures no upstream at all: tailnet
+    # names resolve, every public name fails. resolved keeps the DHCP
+    # nameservers and routes only ts.net to MagicDNS.
+    services.resolved.enable = true;
+
     services.tailscale = {
       enable = true;
       useRoutingFeatures = "none";
