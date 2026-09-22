@@ -94,6 +94,11 @@ in
     openssh.authorizedKeys.keys = import ./admin-keys.nix;
   };
 
+  # claude-code ships under Anthropic's own terms, so nixpkgs marks it unfree.
+  # A predicate keeps the allowance to that one package instead of opening the
+  # whole unfree set on a host that runs other people's code.
+  nixpkgs.config.allowUnfreePredicate = pkg: lib.getName pkg == "claude-code";
+
   # The human login. `admin` stays as the break-glass account; day to day work
   # (and any T3 Code remote environment) runs as this user.
   users.users.percules = {
