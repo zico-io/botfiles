@@ -1,1 +1,3 @@
 {"canonical_id":"ent_0001","name":"Bask","type":"product","aliases":["bask-app"],"source":"seed","date":"2026-07-07"}
+{"canonical_id":"ent_0002","name":"sandbox-host","type":"host","aliases":["sandbox-gateway","nixos sandbox vm"],"source":"hosts/sandbox-host","date":"2026-09-21"}
+{"canonical_id":"ent_0003","name":"microsandbox","type":"tool","aliases":["msb"],"source":"pkgs/microsandbox.nix","date":"2026-09-21"}

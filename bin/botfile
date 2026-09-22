@@ -13,7 +13,6 @@ grep searches it instantly. Add retrieval when grep actually hurts.
 import json
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 

@@ -20,6 +20,11 @@ bin/botfile                   # CLI (validate / budget-check / wire / selfcheck)
     tools/{tool}.md           # CLI patterns, configs, workarounds
   entities/entities.jsonl     # canonical entities + aliases
 .github/workflows/botfile.yml # CI: selfcheck + validate + budget-check
+flake.nix                     # dev shell, checks, and the sandbox-host NixOS guest
+pkgs/microsandbox.nix         # msb, packaged from upstream's release archive
+modules/{microsandbox,tailnet}.nix
+hosts/sandbox-host/           # the NixOS VM on the TrueNAS box
+secrets/                      # sops + age, ciphertext only
 ```
 
 Facts are distilled, never raw transcripts, and each carries inline provenance:
@@ -76,6 +81,45 @@ BOTFILE_NO_SANDBOX=1 python3 orchestration/spawn.py up <roster.json>   # bare ho
 
 Open by design (tighten later if the threat model needs it): egress is open NAT,
 and all agents in one mission share the VM. See `.botfile/memory/tools/sandbox.md`.
+
+## Nix
+
+The repo is a flake. It covers two unrelated things that both want pinning: the
+toolchain you work in, and the Linux box the agents run on.
+
+```bash
+nix develop                 # python3, node 24, rust, gh, jq, sops
+nix flake check             # bin/botfile selfcheck + validate + budget-check
+```
+
+### sandbox-host
+
+`nixosConfigurations.sandbox-host` is a NixOS guest on the bare-metal TrueNAS
+box, giving coding agents KVM microVMs over the tailnet. It is a **second**
+sandbox backend, not a replacement for the Apple `container` path above: that
+one is macOS-local and per-mission, this one is always-on and remote.
+
+```bash
+nixos-rebuild switch --flake .#sandbox-host \
+  --target-host sandbox-host.<tailnet>.ts.net
+```
+
+Disks are declarative (disko: OS, workspace, cache, artifacts on four VirtIO
+disks), secrets are sops + age with only ciphertext committed, and the access
+posture is deny-by-default: no LAN ports, `trustedInterfaces = [ "tailscale0" ]`,
+no password auth anywhere, Tailscale SSH as the authentication boundary. When
+tailscale itself is down the recovery path is the TrueNAS VNC console, on
+purpose.
+
+`msb doctor` runs at boot as `microsandbox-preflight.service`, so a hypervisor
+with nested virtualization switched off fails there rather than at the first
+agent job.
+
+Known gaps, documented rather than hidden: microsandbox 0.7.x is a CLI with no
+daemon or HTTP API, so there is no job-submission endpoint to wrap - agents
+reach the host over Tailscale SSH and drive `msb` directly. The systemd slice
+bounds module-managed units, not sandboxes started from an interactive session,
+and there is no TTL reaper yet.
 
 ## What's deliberately not here
 
