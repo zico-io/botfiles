@@ -99,6 +99,11 @@ in
   # password that was never set would only make sudo unusable.
   security.sudo.wheelNeedsPassword = false;
 
+  # T3 Code's remote runtime, and the agent CLIs it launches, are prebuilt
+  # glibc executables: NixOS has no /lib64/ld-linux, so they fail with a
+  # misleading "no such file or directory" without a loader shim.
+  programs.nix-ld.enable = true;
+
   environment.systemPackages = with pkgs; [
     btop
     git
