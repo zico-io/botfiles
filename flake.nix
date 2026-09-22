@@ -11,6 +11,10 @@
       url = "github:Mic92/sops-nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    home-manager = {
+      url = "github:nix-community/home-manager/release-26.05";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -19,6 +23,7 @@
       nixpkgs,
       disko,
       sops-nix,
+      home-manager,
     }:
     let
       # Hand-rolled instead of flake-utils: one fewer input for one genAttrs.
@@ -47,7 +52,13 @@
         default = import ./nix/shell.nix { inherit pkgs; };
       });
 
-      checks = forAllSystems (pkgs: import ./nix/checks.nix { inherit pkgs; src = self; });
+      checks = forAllSystems (
+        pkgs:
+        import ./nix/checks.nix {
+          inherit pkgs;
+          src = self;
+        }
+      );
 
       formatter = forAllSystems (pkgs: pkgs.nixfmt);
 
@@ -61,6 +72,7 @@
         modules = [
           disko.nixosModules.disko
           sops-nix.nixosModules.sops
+          home-manager.nixosModules.home-manager
           self.nixosModules.microsandbox
           self.nixosModules.tailnet
           ./hosts/sandbox-host

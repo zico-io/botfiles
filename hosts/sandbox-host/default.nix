@@ -94,6 +94,27 @@ in
     openssh.authorizedKeys.keys = import ./admin-keys.nix;
   };
 
+  # The human login. `admin` stays as the break-glass account; day to day work
+  # (and any T3 Code remote environment) runs as this user.
+  users.users.percules = {
+    isNormalUser = true;
+    extraGroups = [
+      "wheel"
+      "kvm"
+      config.services.microsandbox.group
+    ];
+    openssh.authorizedKeys.keys = import ./admin-keys.nix;
+  };
+
+  home-manager = {
+    # One package set and one profile generation per user: the alternative
+    # pulls a second nixpkgs into the closure and installs into ~/.nix-profile,
+    # which then drifts from what `nixos-rebuild` just deployed.
+    useGlobalPkgs = true;
+    useUserPackages = true;
+    users.percules = import ./home.nix;
+  };
+
   # This host has no password anywhere: no password SSH, no password console
   # login, and tailnet identity is the authentication boundary. Prompting for a
   # password that was never set would only make sudo unusable.
