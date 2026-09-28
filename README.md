@@ -82,6 +82,25 @@ BOTFILE_NO_SANDBOX=1 python3 orchestration/spawn.py up <roster.json>   # bare ho
 Open by design (tighten later if the threat model needs it): egress is open NAT,
 and all agents in one mission share the VM. See `.botfile/memory/tools/sandbox.md`.
 
+### Model proxy
+
+`spawn.py up` also starts a per-mission [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)
+on the host and points every claude and codex agent at it. The fleet then
+round-robins across every logged-in subscription account and Vercel AI Gateway, and a
+roster `model` can name any upstream (`gpt-5.5` on a claude harness, `kimi-k3`,
+`glm-5.3`). AI Gateway model aliases live in `orchestration/cliproxy.json`. With no
+accounts and no key, the proxy stays off and agents use their own logins.
+
+```bash
+brew install cliproxyapi
+cliproxyapi -claude-login      # once per Claude account
+cliproxyapi -codex-login       # once per ChatGPT account
+export AI_GATEWAY_API_KEY=...  # optional, Vercel AI Gateway
+```
+
+pi roles are not routed yet. Pooling several Claude subscriptions goes against
+Anthropic's consumer terms and can get those accounts banned.
+
 ## Nix
 
 The repo is a flake. It covers two unrelated things that both want pinning: the

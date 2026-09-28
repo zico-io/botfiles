@@ -1,0 +1,18 @@
+{
+  "config-version": 8,
+  "routing": {"strategy": "round-robin", "session-affinity": true},
+  "api-keys": {
+    "openai-compatibility": [
+      {
+        "name": "ai-gateway",
+        "base-url": "https://ai-gateway.vercel.sh/v1",
+        "models": [
+          {"name": "moonshotai/kimi-k3", "alias": "kimi-k3"},
+          {"name": "moonshotai/kimi-k2.7-code", "alias": "kimi-k2.7-code"},
+          {"name": "zai/glm-5.3", "alias": "glm-5.3"},
+          {"name": "deepseek/deepseek-v4-pro", "alias": "deepseek-v4-pro"}
+        ]
+      }
+    ]
+  }
+}

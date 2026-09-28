@@ -22,6 +22,7 @@ Usage:
 
 See orchestration/roster.example.json and .claude/commands/spawn-team.md.
 """
+import glob
 import json
 import os
 import secrets
@@ -526,6 +527,104 @@ def orbal_net_up(feature):
     return url
 
 
+# --- CLIProxyAPI model proxy (github.com/router-for-me/CLIProxyAPI) ----------
+# One per mission on the host, symmetric to orbal_net_up. claude and codex agents
+# send every model call through it, so the fleet round-robins across every
+# subscription account logged into CLIPROXY_AUTH_DIR (`cliproxyapi -claude-login` /
+# `-codex-login`, once per account) plus Vercel AI Gateway (AI_GATEWAY_API_KEY). A role's
+# roster `model` can name any upstream the proxy serves (e.g. a claude harness on
+# `gpt-5.5` or `kimi-k3`). Gateway model aliases live in orchestration/cliproxy.json.
+CLIPROXY_AUTH_DIR = os.path.expanduser(os.environ.get("CLIPROXY_AUTH_DIR", "~/.cli-proxy-api"))
+CLIPROXY_BASE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cliproxy.json")
+CLIPROXY_KEY_ENV = "CLIPROXY_API_KEY"
+
+
+def _ensure_cliproxy():
+    if shutil.which("cliproxyapi"):
+        return
+    print("cliproxyapi not on PATH; installing via brew...", file=sys.stderr)
+    if subprocess.run(["brew", "install", "cliproxyapi"]).returncode != 0:
+        sys.exit("could not install cliproxyapi; `brew install cliproxyapi` manually")
+
+
+def _free_port():
+    # ponytail: bind-then-release has a tiny race before the proxy binds; fine on one host.
+    with socket.socket() as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
+
+
+def cliproxy_config(accounts, gateway_key):
+    """The mission's proxy config (YAML is a JSON superset, so JSON it is), or None
+    when there is no upstream to route to. Drops AI Gateway without a key."""
+    if not accounts and not gateway_key:
+        return None
+    cfg = json.load(open(CLIPROXY_BASE))
+    compat = cfg.get("api-keys", {}).get("openai-compatibility", [])
+    for p in list(compat):
+        if p["name"] == "ai-gateway":
+            if gateway_key:
+                p["keys"] = [{"api-key": gateway_key}]
+            else:
+                compat.remove(p)
+    cfg.setdefault("oauth", {})["auth-dir"] = CLIPROXY_AUTH_DIR
+    return cfg
+
+
+def cliproxy_up(feature):
+    """Start this mission's CLIProxyAPI on the host; record url/token/pid in mission.json.
+    No-op (agents keep their own OAuth) when no accounts are logged in and no
+    AI Gateway key is set."""
+    accounts = glob.glob(os.path.join(CLIPROXY_AUTH_DIR, "*.json"))
+    cfg = cliproxy_config(accounts, os.environ.get("AI_GATEWAY_API_KEY"))
+    if cfg is None:
+        print(f"cliproxy: off (no accounts in {CLIPROXY_AUTH_DIR}, no AI_GATEWAY_API_KEY); "
+              f"agents use their own logins", file=sys.stderr)
+        return None
+    _ensure_cliproxy()
+    token, port = secrets.token_hex(16), _free_port()
+    # Binds all interfaces so the mission VM can reach it; the client key gates access
+    # and the management API stays off (empty secret-key).
+    cfg["server"] = {"host": "", "port": port}
+    cfg["access"] = {"api-keys": [token]}
+    state_dir = os.path.join(MISSIONS_ROOT, feature)
+    os.makedirs(state_dir, exist_ok=True)
+    conf = os.path.join(state_dir, "cliproxy.yaml")
+    with open(os.open(conf, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
+        json.dump(cfg, f)  # holds the AI Gateway key: owner-only
+    log_path = os.path.join(state_dir, "cliproxy.log")
+    # ponytail: concurrent missions share CLIPROXY_AUTH_DIR, so two proxies may race an
+    # OAuth refresh; move to one long-lived host proxy if accounts start getting logged out.
+    proc = subprocess.Popen(["cliproxyapi", "-config", conf], stdout=open(log_path, "w"),
+                            stderr=subprocess.STDOUT, start_new_session=True)
+    end = time.time() + 15
+    while "API server started successfully" not in open(log_path).read():
+        if proc.poll() is not None or time.time() > end:
+            proc.kill()
+            sys.exit(f"cliproxyapi failed to start; see {log_path}")
+        time.sleep(0.1)
+    url = f"http://{_advertise_host()}:{port}"
+    _save_state(feature, cliproxy_url=url, cliproxy_token=token, cliproxy_pid=proc.pid)
+    print(f"cliproxy: {url} ({len(accounts)} account(s), ai-gateway "
+          f"{'on' if os.environ.get('AI_GATEWAY_API_KEY') else 'off'})", file=sys.stderr)
+    return url
+
+
+def cliproxy_harness(harness, cmd, st):
+    """(env, cmd) that route `harness` through the mission's proxy, if one is up."""
+    url, token = st.get("cliproxy_url"), st.get("cliproxy_token")
+    if not url:
+        return {}, cmd
+    if harness == "claude":
+        return {"ANTHROPIC_BASE_URL": url, "ANTHROPIC_AUTH_TOKEN": token}, cmd
+    if harness == "codex":
+        p = "model_providers.cliproxy"
+        flags = (f" -c model_provider=cliproxy -c {p}.name=cliproxy -c {p}.base_url={url}/v1"
+                 f" -c {p}.env_key={CLIPROXY_KEY_ENV} -c {p}.wire_api=responses")
+        return {CLIPROXY_KEY_ENV: token}, cmd + flags
+    return {}, cmd  # ponytail: pi keeps its own providers (pi-models.json); add a proxy provider when a pi role needs it
+
+
 # --- eve connector lifecycle (symmetric to orbal_net_up) ---------------------
 # A LOCAL eve role runs `eve start` in a herdr pane inside the mission VM; its
 # connector runs ALONGSIDE it (same VM in sandbox mode; same host in bare mode),
@@ -846,7 +945,8 @@ def launch(pane, role, harness, model, feature, parent, has_brief=False):
         herdr("pane", "run", pane, sandbox_wrap(spec["cmd"].format(model=model, role=role), feature, env))
         herdr("wait", "output", pane, "--match", spec["ready"], "--timeout", EVE_READY_TIMEOUT_MS)
         return
-    herdr("pane", "run", pane, sandbox_wrap(spec["cmd"].format(model=model, role=role), feature, env))
+    proxy_env, cmd = cliproxy_harness(harness, spec["cmd"].format(model=model, role=role), st)
+    herdr("pane", "run", pane, sandbox_wrap(cmd, feature, {**env, **proxy_env}))
     herdr("wait", "output", pane, "--match", spec["ready"], "--timeout", READY_TIMEOUT_MS)
     herdr("pane", "run", pane, bootstrap(role, harness, feature, parent, has_brief))
     submit(pane, spec)
@@ -952,6 +1052,7 @@ def up(roster_path, only=None):
         if SANDBOX:
             mission_up(feature, repo)  # per-mission microVM: isolated clone + creds
         orbal_net_up(feature)              # authoritative host orbal-net server for this mission (all modes)
+        cliproxy_up(feature)               # model proxy for claude/codex agents (skipped with no upstreams)
         _verify_agent_orbal_net(feature)   # fail loud now if agents can't resolve `orbal-net`
         # Seed the mission room owned by the orchestrator (the pane the human drives).
         # Leads then `join` it deterministically, and the orchestrator can `orbal-net send`
@@ -1053,6 +1154,11 @@ def down(feature):
                 os.kill(pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass  # already gone (crashed / manually killed) - nothing to clean up
+    if st.get("cliproxy_pid"):
+        try:
+            os.kill(st["cliproxy_pid"], signal.SIGTERM)
+        except ProcessLookupError:
+            pass
 
     # Gracefully stop the eve connector before tearing the VM down, so it fsyncs its
     # cursor. In sandbox mode the `container rm -f` in mission_down is the hard reap
@@ -1097,6 +1203,11 @@ def status(feature):
         if not alive:
             out.append(f"    (restart: orbal-net serve --token {st.get('orbal_net_token','?')} "
                        f"--port <port-from-url> --db {os.path.join(MISSIONS_ROOT, feature, 'orbal-net.db')})")
+
+    if st.get("cliproxy_pid"):
+        p = st["cliproxy_pid"]
+        out.append(f"  cliproxy: pid {p} {'ALIVE' if _pid_alive(p) else 'DEAD'}  {st.get('cliproxy_url')}"
+                   f"  (log: {os.path.join(MISSIONS_ROOT, feature, 'cliproxy.log')})")
 
     if SANDBOX:
         rows = subprocess.run(["container", "list"], capture_output=True, text=True).stdout.splitlines()
@@ -1245,6 +1356,19 @@ def selfcheck():
         SANDBOX = saved_sandbox
     # SANDBOX mode never blocks, regardless of harness (pre-answered inside the VM)
     _verify_bare_mode_supported(ok, select_leads(ok))
+
+    # cliproxy: no upstreams -> off; ai-gateway entry only survives with a key.
+    assert cliproxy_config([], None) is None
+    compat = lambda c: [p["name"] for p in c["api-keys"]["openai-compatibility"]]
+    assert compat(cliproxy_config(["a.json"], None)) == []
+    cfg = cliproxy_config([], "vck")
+    assert compat(cfg) == ["ai-gateway"] and cfg["api-keys"]["openai-compatibility"][0]["keys"] == [{"api-key": "vck"}]
+    assert cliproxy_harness("claude", "claude", {}) == ({}, "claude")
+    st = {"cliproxy_url": "http://h:1", "cliproxy_token": "t"}
+    assert cliproxy_harness("claude", "claude", st) == ({"ANTHROPIC_BASE_URL": "http://h:1", "ANTHROPIC_AUTH_TOKEN": "t"}, "claude")
+    env, cmd = cliproxy_harness("codex", "codex", st)
+    assert env == {CLIPROXY_KEY_ENV: "t"} and "base_url=http://h:1/v1" in cmd and "model_provider=cliproxy" in cmd
+    assert cliproxy_harness("pi", "pi", st) == ({}, "pi")
     print("selfcheck ok")
 
 
