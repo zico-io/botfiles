@@ -3,21 +3,22 @@
 { pkgs, src }:
 
 let
-  botfile =
-    name:
-    pkgs.runCommand "botfile-${name}"
+  gate =
+    tool: name:
+    pkgs.runCommand "${tool}-${name}"
       {
         nativeBuildInputs = [ pkgs.python3 ];
       }
       ''
         cp -r ${src} repo
         chmod -R u+w repo
-        python3 repo/bin/botfile ${name}
+        python3 repo/bin/${tool} ${name}
         touch $out
       '';
 in
 {
-  botfile-selfcheck = botfile "selfcheck";
-  botfile-validate = botfile "validate";
-  botfile-budget-check = botfile "budget-check";
+  botfile-selfcheck = gate "botfile" "selfcheck";
+  botfile-validate = gate "botfile" "validate";
+  botfile-budget-check = gate "botfile" "budget-check";
+  toolbox-selfcheck = gate "toolbox" "selfcheck";
 }

@@ -9,6 +9,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: selfcheck
         run: ./bin/botfile selfcheck
+      - name: toolbox selfcheck
+        run: ./bin/toolbox selfcheck
       - name: validate
         run: ./bin/botfile validate
       - name: budget-check
@@ -33,4 +35,5 @@ jobs:
           nix build --show-trace --print-build-logs \
             .#checks.x86_64-linux.botfile-selfcheck \
             .#checks.x86_64-linux.botfile-validate \
-            .#checks.x86_64-linux.botfile-budget-check
+            .#checks.x86_64-linux.botfile-budget-check \
+            .#checks.x86_64-linux.toolbox-selfcheck

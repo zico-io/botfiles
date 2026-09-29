@@ -1,0 +1,51 @@
+{
+  "skills": [
+    "../skills",
+    "~/.claude/skills",
+    "~/.claude/commands"
+  ],
+  "plugins": [
+    "vercel@claude-plugins-official",
+    "understand-anything@understand-anything"
+  ],
+  "mcp": {
+    "bask-works": {
+      "type": "http",
+      "url": "https://app.bask.works/api/mcp",
+      "description": "Bask platform admin for a store: products, drugs, bundles, coupons, questionnaires and checkout flows, treatment plans, patients, orders, billing, workflows, webhooks, email templates, brand/domain settings, Sites pages and catalog, messenger, analytics queries."
+    },
+    "langsmith": {
+      "type": "http",
+      "url": "https://aws.api.smith.langchain.com/mcp",
+      "description": "LangSmith LLM observability: fetch runs and traces, thread history, datasets and examples, experiments, prompts (read and push), insights reports, billing usage."
+    },
+    "Notion": {
+      "type": "claudeai",
+      "description": "Notion workspace docs and wikis: find, read, create, or update pages and databases, query data sources, comments, meeting notes, users and teams."
+    },
+    "Gmail": {
+      "type": "claudeai",
+      "description": "Gmail email inbox: search threads, read messages, draft, send, reply, forward, labels, spam and trash."
+    },
+    "Google_Calendar": {
+      "type": "claudeai",
+      "description": "Google Calendar: schedule, move, or cancel meetings and events, check availability and suggest free times, respond to invites, list and search events and calendars."
+    },
+    "Google_Drive": {
+      "type": "claudeai",
+      "description": "Google Drive files and docs: search, read content, download, create, update, copy, share, permissions, trash."
+    },
+    "Granola": {
+      "type": "claudeai",
+      "description": "Granola meeting notes: list and query meetings, read transcripts and AI notes, meeting folders."
+    },
+    "Datadog": {
+      "type": "claudeai",
+      "description": "Datadog observability: logs, metrics, APM traces and spans, monitors, dashboards, incidents, error tracking, RUM, CI pipelines and tests, security signals, database monitoring, LLM observability, profiling."
+    },
+    "Vercel": {
+      "type": "claudeai",
+      "description": "Vercel platform: projects, deployments and build logs, runtime logs and errors, domains and DNS, env vars, feature flags, firewall, edge config, sandboxes, teams, analytics, rolling releases."
+    }
+  }
+}
