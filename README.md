@@ -11,6 +11,8 @@ actually hurts, not before.
 AGENTS.md                     # SSOT — Codex + Pi read natively, Claude via import
 CLAUDE.md                     # thin importer: "@AGENTS.md" + Claude-only extras
 bin/botfile                   # CLI (validate / budget-check / wire / selfcheck)
+bin/toolbox                   # search/use front door for skills + MCP integrations
+toolbox/catalog.json          # what the toolbox holds
 .botfile/
   botfile.yaml                # manifest
   memory/
@@ -57,6 +59,48 @@ converge on the same `AGENTS.md`.
 
 Per-repo, a root `CLAUDE.md` importing `@AGENTS.md` is **mandatory** for Claude
 Code — a repo with only `AGENTS.md` gives Claude Code zero instructions, silently.
+
+## Toolbox
+
+Every skill and MCP server a harness loads costs context on every turn, used or
+not. `bin/toolbox` puts them behind two MCP tools instead:
+
+- `search(query)` - BM25 over names and descriptions, returns ranked tool names.
+- `use(tool, prompt)` - a **skill** returns its SKILL.md body for the caller to
+  follow. An **integration** runs `prompt` in a `claude -p` subagent that sees
+  only that server's tools and returns the result.
+
+`toolbox/catalog.json` lists skill roots (relative to the catalog), Claude plugins to index,
+and MCP integrations. An integration is a normal MCP server config (`http`,
+`stdio`, `sse`) plus a `description`, or `"type": "claudeai"` for a claude.ai
+connector, named as it appears in tool ids (`Google_Calendar`). Descriptions
+drive search, so name the nouns and verbs an agent would ask for.
+
+```bash
+bin/toolbox search "why is my deploy failing"
+bin/toolbox use Notion "find the onboarding page and summarise it"
+claude mcp add -s user toolbox -- "$PWD/bin/toolbox" mcp   # Claude Code
+codex mcp add toolbox -- "$PWD/bin/toolbox" mcp            # Codex
+```
+
+Codex asks before every MCP call and `codex exec` refuses outright, so let
+`search` (read-only) through in `~/.codex/config.toml` and keep `use` gated:
+
+```toml
+[mcp_servers.toolbox.tools.search]
+approval_mode = "approve"
+```
+
+To take something out of ambient context, add it to the catalog, then hide it
+from the main session: `permissions.deny: ["mcp__<server>"]` in
+`~/.claude/settings.json` for an MCP server, or disable the plugin. The subagent
+runs with `--setting-sources project` from an empty temp dir, so it skips those
+denies (and user hooks and plugins) and can still reach the server. It reuses the
+harness's stored OAuth, so authorise a server once in an interactive `/mcp`.
+
+A `use` call has the integration's full tool surface, writes included, gated
+only by the caller's approval of the `use` call itself. `$TOOLBOX_MODEL`
+(default `claude-sonnet-5-5`) picks the subagent model.
 
 ## Sandbox
 

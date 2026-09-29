@@ -60,6 +60,12 @@ Spawned agents have no `gh`/network and their clone's origin is a local mirror, 
 orchestrator bridges every live GitHub step (push + PR via `spawn.py bridge-pr <feature>`,
 release edits, repo settings); agents prepare those artifacts as files/text.
 
+## Toolbox
+
+Skills and MCP integrations beyond the core set sit behind the `toolbox` MCP
+server: `search(query)` to find one, `use(tool, prompt)` to run it. Search it
+before saying a capability is missing. See `.botfile/memory/tools/toolbox.md`.
+
 ## Nix layer
 
 `flake.nix` pins two things: the dev toolchain (`nix develop`) and
