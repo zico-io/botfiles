@@ -1,4 +1,4 @@
-# home-manager config for `percules`, the human login on sandbox-host.
+# home-manager config shared by the human logins on sandbox-host.
 #
 # Machine-wide concerns stay in the system config; this file owns only what
 # belongs to the session an agent or a person actually works in.
@@ -6,15 +6,8 @@
 {
   home.stateVersion = "26.05";
 
-  # Commits made from an agent session on this host would otherwise be authored
-  # by `percules@sandbox-host`.
-  programs.git = {
-    enable = true;
-    settings.user = {
-      name = "Nico Zamora";
-      email = "dev@zico.xyz";
-    };
-  };
+  # The identity itself is per user, set next to each login in default.nix.
+  programs.git.enable = true;
 
   programs.helix = {
     enable = true;
@@ -45,7 +38,7 @@
   # the only thing that changes what runs. `programs.nix-ld` (system config)
   # stays as the escape hatch for running a vendor installer by hand.
   #
-  # With useUserPackages these land in /etc/profiles/per-user/percules/bin,
+  # With useUserPackages these land in /etc/profiles/per-user/<user>/bin,
   # which is the absolute path to give T3 Code if a non-login SSH shell hands
   # it a thin PATH.
   home.packages = with pkgs; [

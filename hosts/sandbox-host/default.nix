@@ -111,13 +111,39 @@ in
     openssh.authorizedKeys.keys = import ./admin-keys.nix;
   };
 
+  # A second human login. No wheel: sudo here is passwordless root over every
+  # other user's home. kvm and the microsandbox group are what running
+  # sandboxes needs. No SSH keys; Tailscale SSH is the only way in.
+  users.users.kiera = {
+    isNormalUser = true;
+    extraGroups = [
+      "kvm"
+      config.services.microsandbox.group
+    ];
+  };
+
   home-manager = {
     # One package set and one profile generation per user: the alternative
     # pulls a second nixpkgs into the closure and installs into ~/.nix-profile,
     # which then drifts from what `nixos-rebuild` just deployed.
     useGlobalPkgs = true;
     useUserPackages = true;
-    users.percules = import ./home.nix;
+    # Commits made from an agent session on this host would otherwise be
+    # authored by `<user>@sandbox-host`.
+    users.percules = {
+      imports = [ ./home.nix ];
+      programs.git.settings.user = {
+        name = "Nico Zamora";
+        email = "dev@zico.xyz";
+      };
+    };
+    users.kiera = {
+      imports = [ ./home.nix ];
+      programs.git.settings.user = {
+        name = "Kiera McCabe";
+        email = "kiera@bask.health";
+      };
+    };
   };
 
   # This host has no password anywhere: no password SSH, no password console
