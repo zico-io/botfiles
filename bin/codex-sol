@@ -1,0 +1,27 @@
+#!/bin/sh
+# codex on openai/gpt-6.1-sol through Vercel AI Gateway: the ChatGPT login rejects
+# gpt-6.1-sol, so this is the route for code-change and review work. The bare slug
+# keeps codex's built-in model metadata; an explicit --model still wins.
+# Auth: a Vercel OIDC token for zico-ios-projects/bob, pulled with the `vercel login`
+# cred (host, or the one mission VMs get staged) and cached. $AI_GATEWAY_API_KEY overrides.
+# ponytail: the token is read once at launch, lives 12h, and is refreshed after 11h
+# so a fresh launch has an hour of headroom; a codex session running past its expiry
+# needs a restart. Refresh-in-place needs a gateway-aware codex auth hook.
+if [ -z "$AI_GATEWAY_API_KEY" ]; then
+  cache="${XDG_CACHE_HOME:-$HOME/.cache}/codex-sol"
+  env="$cache/.env.oidc"
+  if [ -z "$(find "$env" -mmin -660 2>/dev/null)" ]; then
+    mkdir -p "$cache"
+    (cd "$cache" && vercel link --yes --scope zico-ios-projects --project bob >/dev/null 2>&1 &&
+      vercel env pull .env.oidc --yes >/dev/null 2>&1)
+  fi
+  AI_GATEWAY_API_KEY=$(sed -n 's/^VERCEL_OIDC_TOKEN="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$env" 2>/dev/null)
+fi
+if [ -z "$AI_GATEWAY_API_KEY" ]; then
+  echo "codex-sol: could not get a Vercel OIDC token. Run \`vercel login\`, or set AI_GATEWAY_API_KEY." >&2
+  exit 1
+fi
+export AI_GATEWAY_API_KEY
+p=model_providers.vercel
+exec codex -c model_provider=vercel -c "$p.name=Vercel" -c "$p.base_url=https://ai-gateway.vercel.sh/v1" \
+  -c "$p.env_key=AI_GATEWAY_API_KEY" -c "$p.wire_api=responses" -c model=gpt-6.1-sol "$@"
