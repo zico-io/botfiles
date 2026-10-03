@@ -8,16 +8,18 @@
  */
 
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-const WORKSPACE = process.cwd();
-const MEM_SCRIPT = path.resolve(WORKSPACE, "scripts/mem.py");
-
 function runMem(args: string[]): Promise<{ stdout: string; stderr: string }> {
+	// ~/.pi/agent/extensions is a symlink into the repo; scripts/ sits at its root.
+	const extensions = fs.realpathSync(path.join(os.homedir(), ".pi", "agent", "extensions"));
+	const memScript = path.join(extensions, "..", "..", "..", "scripts", "mem.py");
 	return new Promise((resolve, reject) => {
-		const proc = spawn("python3", [MEM_SCRIPT, ...args], { cwd: WORKSPACE });
+		const proc = spawn("python3", [memScript, ...args]);
 		let stdout = "";
 		let stderr = "";
 		proc.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
