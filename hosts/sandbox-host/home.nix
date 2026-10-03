@@ -31,10 +31,12 @@
   # git, jq, ripgrep, and tmux are system-wide already; these are the gaps an
   # agent session hits.
   #
-  # claude-code and codex are the agents T3 Code launches over SSH. Installing
-  # them declaratively costs them their self-update: both refuse to write into
-  # the read-only store, so the version here is whatever the nixpkgs pin holds
-  # until the flake is bumped. That is the trade this host wants - a deploy is
+  # claude-code and codex are the agents T3 Code launches over SSH. They come
+  # from llm-agents.nix, which tracks upstream releases daily, rather than
+  # nixpkgs, which lags them by weeks. Installing them declaratively still
+  # costs them their self-update: both refuse to write into the read-only
+  # store, so the version here is whatever the llm-agents pin holds until
+  # `nix flake update llm-agents`. That is the trade this host wants - a deploy is
   # the only thing that changes what runs. `programs.nix-ld` (system config)
   # stays as the escape hatch for running a vendor installer by hand.
   #
@@ -42,8 +44,8 @@
   # which is the absolute path to give T3 Code if a non-login SSH shell hands
   # it a thin PATH.
   home.packages = with pkgs; [
-    claude-code
-    codex
+    llm-agents.claude-code
+    llm-agents.codex
     fd
     gh
   ];

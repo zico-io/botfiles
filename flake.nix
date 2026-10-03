@@ -15,6 +15,9 @@
       url = "github:nix-community/home-manager/release-26.05";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # No nixpkgs follows: its own pin is what cache.numtide.com built against,
+    # so following ours would turn every agent CLI into a local build.
+    llm-agents.url = "github:numtide/llm-agents.nix";
   };
 
   outputs =
@@ -24,6 +27,7 @@
       disko,
       sops-nix,
       home-manager,
+      llm-agents,
     }:
     let
       # Hand-rolled instead of flake-utils: one fewer input for one genAttrs.
@@ -75,6 +79,11 @@
           home-manager.nixosModules.home-manager
           self.nixosModules.microsandbox
           self.nixosModules.tailnet
+          {
+            nixpkgs.overlays = [
+              (final: prev: { llm-agents = llm-agents.packages.${prev.stdenv.hostPlatform.system}; })
+            ];
+          }
           ./hosts/sandbox-host
         ];
       };
