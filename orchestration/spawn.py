@@ -60,8 +60,6 @@ EVE_START_CMD = (
 HARNESSES = {
     "claude": {"cmd": "claude --dangerously-skip-permissions --model {model}", "ready": "bypass permissions on", "working": "esc to interrupt"},
     "codex":  {"cmd": "codex --dangerously-bypass-approvals-and-sandbox --model {model}", "ready": "Codex", "working": "esc to interrupt"},
-    # codex through Vercel AI Gateway (bin/codex-sol): the default for code-change and review roles.
-    "codex-sol": {"cmd": "codex-sol --dangerously-bypass-approvals-and-sandbox --model {model}", "ready": "Codex", "working": "esc to interrupt"},
     "pi":     {"cmd": "pi --name {role} --model {model}", "ready": "pi", "working": "esc to interrupt"},
     # eve is a server pane, not a TUI: ready when it logs it is serving on :3000;
     # it has no "working" marker (turns are sub-second Function calls on the session
@@ -320,8 +318,7 @@ def mission_secrets(feature):
     codex = os.path.expanduser("~/.codex/auth.json")
     if os.path.exists(codex):
         shutil.copyfile(codex, os.path.join(d, "codex.auth.json"))
-    # Vercel CLI cred (host `vercel login`), so in-VM agents can `vercel deploy` and the
-    # codex-sol harness can pull its AI Gateway OIDC token.
+    # Vercel CLI cred (host `vercel login`), so in-VM agents can `vercel deploy`.
     vercel = os.path.expanduser("~/Library/Application Support/com.vercel.cli/auth.json")
     if os.path.exists(vercel):
         shutil.copyfile(vercel, os.path.join(d, "vercel.auth.json"))
@@ -1019,7 +1016,7 @@ def _reset_mission_state(feature):
 # (see the SANDBOX comment above); fail fast here instead of burning that timeout on
 # a run that cannot succeed. `pi` has no known first-run gate, so a pi-only bare
 # roster is unaffected.
-UNSEEDED_HARNESSES_BARE = {"claude", "codex", "codex-sol"}
+UNSEEDED_HARNESSES_BARE = {"claude", "codex"}
 
 
 def _verify_bare_mode_supported(roster, leads):

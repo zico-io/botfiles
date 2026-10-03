@@ -56,9 +56,6 @@ RUN /opt/botfiles/provision.sh
 # wcommit — the serialized commit wrapper workers use since they share one clone.
 COPY --chmod=755 bin/wcommit /usr/local/bin/wcommit
 
-# codex-sol - codex on gpt-6.1-sol via Vercel AI Gateway (the `codex-sol` harness).
-COPY --chmod=755 bin/codex-sol /usr/local/bin/codex-sol
-
 COPY --chmod=755 sandbox/entrypoint.sh /usr/local/bin/entrypoint
 
 # This whole image is the sandbox boundary, so the harnesses' root-guard on
