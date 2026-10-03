@@ -13,10 +13,12 @@ with persistent, portable memory.
   corrected, not accumulated.
 - **No em dashes.** Use a plain dash "-" instead of "—".
 - **Never auto-add the agent name** as co-author in commit messages or PRs.
-- **Never hand-edit auto-generated files.**
+- **Never hand-edit auto-generated files,** CHANGELOG.md included.
 - **Quality over cost.** Favor simplicity and robustness above development speed.
 - **Verify, don't assume.** Start every bug or investigation by reproducing the issue in an E2E user environment.
 - **Pixel perfect.** Watch the UI closely; fix anything that looks off.
+- **Leave it green.** Fix lint errors, test failures, and flaky tests you run into,
+  even ones you did not cause.
 
 ## Memory discipline
 
@@ -59,6 +61,15 @@ for their next task with `orbal-net recv <room>` (push-backed, replaces the old
 Spawned agents have no `gh`/network and their clone's origin is a local mirror, so the
 orchestrator bridges every live GitHub step (push + PR via `spawn.py bridge-pr <feature>`,
 release edits, repo settings); agents prepare those artifacts as files/text.
+
+## Harness config
+
+`claude/`, `pi/`, `config/`, and `launchd/` hold the live Claude Code, pi, herdr,
+and LaunchAgent config; `provision.sh` symlinks them into `$HOME`, so edit them
+here. Pi keeps its own cross-session memory in `pi/memory/*.md` (memweave,
+`scripts/mem.py search|write|list|stats|rebuild`). Inside herdr,
+`scripts/review-pane <file.md|file.diff>` or `--diff [git args]` shows the user
+rendered markdown or a diff in a side pane.
 
 ## Toolbox
 

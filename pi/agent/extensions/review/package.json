@@ -1,0 +1,15 @@
+{
+  "name": "@repo/pi-review",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "check-types": "echo 'no type check'",
+    "test": "echo 'no tests'"
+  }
+}

@@ -12,6 +12,14 @@ AGENTS.md                     # SSOT — Claude Code, Codex, and Pi read it nati
 bin/botfile                   # CLI (validate / budget-check / wire / selfcheck)
 bin/toolbox                   # search/use front door for skills + MCP integrations
 toolbox/catalog.json          # what the toolbox holds
+provision.sh                  # links everything below into $HOME (idempotent)
+claude/{agents,commands,hooks}/ # -> ~/.claude/*
+pi/agent/                     # -> ~/.pi/agent/{agents,extensions,prompts,settings.json}
+pi/missions/                  # -> ~/.pi/missions
+pi/memory/                    # pi's memweave store (scripts/mem.py)
+config/herdr/config.toml      # -> ~/.config/herdr/config.toml
+launchd/*.plist               # -> ~/Library/LaunchAgents (loaded by provision.sh)
+scripts/                      # herdr panes, memweave, claude-sandbox helpers
 .botfile/
   botfile.yaml                # manifest
   memory/
@@ -46,6 +54,12 @@ fields and a unique `canonical_id`; `memory/index.md` lists exactly the memory
 files that exist; every fact bullet carries `<source: …, date>`.
 
 ## Wiring a harness
+
+Run `bash provision.sh` on a new machine. It links the harness config above into
+place (moving any real file it would replace to `.bak`), installs pi extension
+deps, loads the LaunchAgents, and registers the toolbox. Runtime state stays out
+of the repo: pi's `auth.json`, `sessions/`, `npm/`, and caches live in a real
+`~/.pi/agent`.
 
 `bin/botfile wire` (or `provision.sh`) symlinks each harness's global
 `AGENTS.md` to this repo's: `~/.claude/AGENTS.md`, `~/.codex/AGENTS.md`, and

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Browse the agent memory .md library in glow's interactive TUI.
+# ponytail: glow already does dir-browse + markdown render; this just aims it at pi/memory/.
+set -euo pipefail
+MEM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/pi/memory"
+exec glow "$@" "$MEM_DIR"
