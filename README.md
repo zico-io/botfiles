@@ -8,8 +8,7 @@ actually hurts, not before.
 ## Layout
 
 ```
-AGENTS.md                     # SSOT — Codex + Pi read natively, Claude via import
-CLAUDE.md                     # thin importer: "@AGENTS.md" + Claude-only extras
+AGENTS.md                     # SSOT — Claude Code, Codex, and Pi read it natively
 bin/botfile                   # CLI (validate / budget-check / wire / selfcheck)
 bin/toolbox                   # search/use front door for skills + MCP integrations
 toolbox/catalog.json          # what the toolbox holds
@@ -48,17 +47,10 @@ files that exist; every fact bullet carries `<source: …, date>`.
 
 ## Wiring a harness
 
-`bin/botfile wire` runs these for you; shown here for reference. All three
-converge on the same `AGENTS.md`.
-
-- **Codex** — `~/.codex/AGENTS.md` symlinked to this repo's `AGENTS.md`.
-- **Pi** — `~/.pi/agent/AGENTS.md` symlinked to this repo's `AGENTS.md`.
-- **Claude Code** — reads only `CLAUDE.md`, so `~/.claude/CLAUDE.md` is written as
-  `@<repo>/AGENTS.md` (absolute path, since Claude walks up from cwd). An existing
-  file is backed up to `CLAUDE.md.bak` first.
-
-Per-repo, a root `CLAUDE.md` importing `@AGENTS.md` is **mandatory** for Claude
-Code — a repo with only `AGENTS.md` gives Claude Code zero instructions, silently.
+`bin/botfile wire` (or `provision.sh`) symlinks each harness's global
+`AGENTS.md` to this repo's: `~/.claude/AGENTS.md`, `~/.codex/AGENTS.md`, and
+`~/.pi/agent/AGENTS.md`. All three read `AGENTS.md` natively, so repos need no
+`CLAUDE.md` importer.
 
 ## Toolbox
 
@@ -79,8 +71,7 @@ drive search, so name the nouns and verbs an agent would ask for.
 ```bash
 bin/toolbox search "why is my deploy failing"
 bin/toolbox use Notion "find the onboarding page and summarise it"
-claude mcp add -s user toolbox -- "$PWD/bin/toolbox" mcp   # Claude Code
-codex mcp add toolbox -- "$PWD/bin/toolbox" mcp            # Codex
+bash provision.sh   # registers toolbox in Claude Code + Codex; pi gets skills/ symlinked
 ```
 
 Codex asks before every MCP call and `codex exec` refuses outright, so let

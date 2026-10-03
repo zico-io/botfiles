@@ -50,15 +50,13 @@ RUN npm install -g \
 # PATH from the Rust-toolchain step above.
 COPY AGENTS.md /opt/botfiles/AGENTS.md
 COPY skills /opt/botfiles/skills
-COPY provision.sh /opt/botfiles/provision.sh
-RUN chmod +x /opt/botfiles/provision.sh && /opt/botfiles/provision.sh
+COPY --chmod=755 provision.sh /opt/botfiles/provision.sh
+RUN /opt/botfiles/provision.sh
 
 # wcommit — the serialized commit wrapper workers use since they share one clone.
-COPY bin/wcommit /usr/local/bin/wcommit
-RUN chmod +x /usr/local/bin/wcommit
+COPY --chmod=755 bin/wcommit /usr/local/bin/wcommit
 
-COPY sandbox/entrypoint.sh /usr/local/bin/entrypoint
-RUN chmod +x /usr/local/bin/entrypoint
+COPY --chmod=755 sandbox/entrypoint.sh /usr/local/bin/entrypoint
 
 # This whole image is the sandbox boundary, so the harnesses' root-guard on
 # --dangerously-skip-permissions is redundant here. IS_SANDBOX=1 is claude's

@@ -22,7 +22,7 @@ ENTITIES = REPO / ".botfile" / "entities" / "entities.jsonl"
 
 # ponytail: single budget value, so it lives here, not in a yaml parser + dep.
 ROOT_MAX_LINES = 200
-ROOT_FILES = ["AGENTS.md", "CLAUDE.md"]
+ROOT_FILES = ["AGENTS.md"]
 
 ENTITY_FIELDS = ["canonical_id", "name", "type", "aliases", "source", "date"]
 DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -142,17 +142,7 @@ def wire(tool):
         elif t == "pi":
             link(home / ".pi" / "agent" / "AGENTS.md")
         elif t == "claude":
-            # Claude walks up from cwd, so the global importer needs an absolute
-            # path to the repo, not a bare @AGENTS.md.
-            dest = home / ".claude" / "CLAUDE.md"
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            content = f"@{agents}\n"
-            if dest.exists() and dest.read_text() != content:
-                bak = dest.with_suffix(".md.bak")
-                bak.write_text(dest.read_text())
-                print(f"  backed up existing {dest} -> {bak}")
-            dest.write_text(content)
-            print(f"  wrote {dest} importing {agents}")
+            link(home / ".claude" / "AGENTS.md")
         else:
             print(f"unknown tool: {t}", file=sys.stderr)
             return 1

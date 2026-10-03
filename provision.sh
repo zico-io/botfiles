@@ -6,8 +6,8 @@ set -euo pipefail
 SSOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/AGENTS.md"
 [ -f "$SSOT" ] || { echo "missing $SSOT" >&2; exit 1; }
 
-# Codex + Pi read AGENTS.md natively -> symlink straight to the SSOT.
-for dir in "$HOME/.codex" "$HOME/.pi/agent"; do
+# Claude Code, Codex, and Pi read AGENTS.md natively -> symlink straight to the SSOT.
+for dir in "$HOME/.claude" "$HOME/.codex" "$HOME/.pi/agent"; do
   mkdir -p "$dir"
   ln -sf "$SSOT" "$dir/AGENTS.md"
   echo "linked $dir/AGENTS.md -> $SSOT"
@@ -23,27 +23,36 @@ if [ -f "$PI_MODELS" ]; then
   echo "linked $HOME/.pi/agent/models.json -> $PI_MODELS"
 fi
 
-# Claude Code only reads CLAUDE.md -> ensure the @import line, without clobbering.
-mkdir -p "$HOME/.claude"
-touch "$HOME/.claude/CLAUDE.md"
-grep -qxF "@$SSOT" "$HOME/.claude/CLAUDE.md" || printf '@%s\n' "$SSOT" >> "$HOME/.claude/CLAUDE.md"
-echo "ensured @import in $HOME/.claude/CLAUDE.md"
-
-# skills/: each harness discovers skills from a per-harness dir holding
-# <name>/SKILL.md subdirs. Symlink each repo skill into all three (same live-edit
-# philosophy as AGENTS.md; ln -sfn replaces the link instead of nesting on re-run).
-SKILLS_DIR="$(dirname "$SSOT")/skills"
-if [ -d "$SKILLS_DIR" ]; then
-  for harness_dir in "$HOME/.claude/skills" "$HOME/.codex/skills" "$HOME/.pi/agent/skills"; do
-    mkdir -p "$harness_dir"
-    for skill in "$SKILLS_DIR"/*/SKILL.md; do
-      [ -f "$skill" ] || continue
-      src="$(dirname "$skill")"
-      ln -sfn "$src" "$harness_dir/$(basename "$src")"
-      echo "linked $harness_dir/$(basename "$src") -> $src"
-    done
+# skills/: served through the toolbox MCP server (bin/toolbox, which indexes
+# skills/ via toolbox/catalog.json) so they cost no context until searched.
+# Claude Code and Codex get the server registered; a harness that cannot reach
+# it (pi has no MCP client, or the sandbox image, which ships no bin/toolbox)
+# gets each skill symlinked into its skills dir instead (ln -sfn replaces the
+# link instead of nesting on re-run). A harness switched to the toolbox has its
+# old links removed so no skill loads twice.
+ROOT="$(dirname "$SSOT")"
+TOOLBOX="$ROOT/bin/toolbox"
+for pair in "claude:$HOME/.claude/skills" "codex:$HOME/.codex/skills" "pi:$HOME/.pi/agent/skills"; do
+  cli="${pair%%:*}" harness_dir="${pair#*:}"
+  served=
+  if [ "$cli" != pi ] && [ -x "$TOOLBOX" ] && command -v "$cli" >/dev/null 2>&1; then
+    if [ "$cli" = claude ]; then add=(claude mcp add -s user); else add=(codex mcp add); fi
+    "$cli" mcp get toolbox >/dev/null 2>&1 || "${add[@]}" toolbox -- "$TOOLBOX" mcp >/dev/null
+    echo "registered toolbox MCP server in $cli"
+    served=1
+  fi
+  mkdir -p "$harness_dir"
+  for skill in "$ROOT"/skills/*/SKILL.md; do
+    [ -f "$skill" ] || continue
+    src="$(dirname "$skill")" link="$harness_dir/$(basename "$(dirname "$skill")")"
+    if [ -n "$served" ]; then
+      [ "$(readlink "$link")" = "$src" ] && rm "$link" && echo "unlinked $link (served by toolbox)"
+    else
+      ln -sfn "$src" "$link"
+      echo "linked $link -> $src"
+    fi
   done
-fi
+done
 
 # orbal-net: one Rust binary (github.com/zico-io/orbal-net) that is both the
 # per-mission server (`orbal-net serve`) and the client agents call. Install it
