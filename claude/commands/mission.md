@@ -42,7 +42,7 @@ Mission brief: $ARGUMENTS
   - **Fan-out research:** several `scripts/squad scout ...` calls exploring
     different parts of the codebase in parallel.
 - Monitor progress; if a squad stalls or fails, reassign or adjust. (Knobs:
-  `SQUAD_MODEL`, `SQUAD_TIMEOUT`, `SQUAD_PERMISSION_MODE`, `SQUAD_KEEP_PANE=1`.)
+  `SQUAD_MODEL`, `SQUAD_PERMISSION_MODE`, `SQUAD_KEEP_PANE=1`.)
 
 **Phase 4.5 — Review Changes, then Commit & Open PR (MANDATORY)**
 After all squads report complete and before calling the mission done:

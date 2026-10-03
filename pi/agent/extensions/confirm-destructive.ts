@@ -2,7 +2,7 @@
  * Confirm Destructive Actions Extension
  *
  * Prompts for confirmation before destructive session actions
- * (new, switch, fork, clone). Prevents accidental data loss.
+ * (new, switch). Prevents accidental data loss.
  */
 
 import type { ExtensionAPI, SessionBeforeSwitchEvent, SessionMessageEntry } from "@earendil-works/pi-coding-agent";
@@ -41,15 +41,4 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  pi.on("session_before_fork", async (event, ctx) => {
-    if (!ctx.hasUI) return;
-    const choice = await ctx.ui.select(
-      `Fork from entry ${event.entryId.slice(0, 8)}?`,
-      ["Yes, create fork", "No, stay in current session"],
-    );
-    if (choice !== "Yes, create fork") {
-      ctx.ui.notify("Fork cancelled", "info");
-      return { cancel: true };
-    }
-  });
 }

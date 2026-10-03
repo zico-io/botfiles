@@ -7,9 +7,5 @@
     "extensions": [
       "./index.ts"
     ]
-  },
-  "scripts": {
-    "check-types": "echo 'no type check'",
-    "test": "echo 'no tests'"
   }
 }

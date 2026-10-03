@@ -265,16 +265,16 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
 // ponytail: inside herdr, run each subagent live in its own pane via
 // scripts/pane-exec (a transparent stdout-relaying wrapper), so the coordinator
 // can watch every agent. pane-exec no-ops the pane outside herdr, but we only
-// wrap when HERDR_ENV=1 to avoid a needless subprocess otherwise. scripts/ is a
-// sibling of ~/.pi (a symlink into the repo), so realpath anchors us to it.
+// wrap when HERDR_ENV=1 to avoid a needless subprocess otherwise. ~/.pi/agent/extensions
+// is a symlink into the repo, so its realpath anchors us to the repo's scripts/.
 function wrapWithPane(
 	invocation: { command: string; args: string[] },
 	label: string,
 ): { command: string; args: string[] } {
 	if (process.env.HERDR_ENV !== "1") return invocation;
 	try {
-		const piRoot = fs.realpathSync(path.join(os.homedir(), ".pi"));
-		const paneExec = path.join(piRoot, "..", "scripts", "pane-exec");
+		const extensions = fs.realpathSync(path.join(os.homedir(), ".pi", "agent", "extensions"));
+		const paneExec = path.join(extensions, "..", "..", "..", "scripts", "pane-exec");
 		if (!fs.existsSync(paneExec)) return invocation;
 		return { command: paneExec, args: [label, invocation.command, ...invocation.args] };
 	} catch {

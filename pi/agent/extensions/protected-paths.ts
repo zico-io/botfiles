@@ -10,9 +10,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 export default function (pi: ExtensionAPI) {
   const protectedPaths = [
     ".env",
-    ".env.local",
-    ".env.production",
-    ".env.development",
     ".git/",
     "node_modules/",
     ".next/",
@@ -24,7 +21,7 @@ export default function (pi: ExtensionAPI) {
     "pnpm-lock.yaml",
     "skills-lock.json",
     ".pi/settings.json",
-    "~/.pi/agent/settings.json",
+    ".pi/agent/settings.json",
   ];
 
   pi.on("tool_call", async (event, ctx) => {

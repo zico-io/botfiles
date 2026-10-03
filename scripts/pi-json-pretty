@@ -2,8 +2,9 @@
 """Render pi's --mode json event stream as a readable live feed for a pane.
 
 Reads one JSON event per line on stdin (the raw stream pi emits) and prints a
-compact human view. Never raises on bad input: unknown/garbled lines are
-skipped so the pane keeps flowing even if the schema drifts. The raw stream is
+compact human view. Never raises on bad input: non-JSON lines (e.g. a claude
+squad's plain text) pass through as-is, and events it can't render are skipped
+so the pane keeps flowing even if the schema drifts. The raw stream is
 captured elsewhere (pane-exec tees it before this filter), so this only shapes
 what a human sees, never what the subagent tool parses.
 """
@@ -68,14 +69,9 @@ def handle(event):
 
 
 for raw in iter(sys.stdin.readline, ""):
-    raw = raw.strip()
-    if not raw:
-        continue
     try:
-        event = json.loads(raw)
-    except (ValueError, TypeError):
-        continue
-    try:
-        handle(event)
+        handle(json.loads(raw))
+    except ValueError:
+        emit(raw.rstrip("\n"))
     except Exception:
         continue

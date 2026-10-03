@@ -126,7 +126,7 @@ herdr pane run "$pane_id" "bash $work/run.sh" >/dev/null
 offset=0
 relay() {
   local size
-  size="$(wc -c < "$work/out" 2>/dev/null || echo 0)"
+  size="$(wc -c 2>/dev/null < "$work/out" || echo 0)"
   if [ "$size" -gt "$offset" ]; then
     tail -c "+$((offset + 1))" "$work/out"
     offset="$size"

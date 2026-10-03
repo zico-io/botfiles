@@ -1,27 +1,16 @@
 #!/usr/bin/env bash
-# squad — run a Claude Code squad agent in the squad's own herdr tab.
+# squad - run a Claude Code squad agent in the squad's own herdr tab.
 #
 #   scripts/squad <agent> <task...>
 #
-# Each squad gets its own tab in the coordinator's workspace; every agent in the
-# squad runs in its own pane inside that tab. A squad defaults to the launching
-# coordinator session (so its agents share a tab); set SQUAD_ID to group agents
-# into a named squad. Runs a real `claude` session as the named agent (from
-# ~/.claude/agents/<agent>.md), waits for it to finish, prints its output to
-# stdout, and closes the pane (and the tab once the last agent finishes). The
-# coordinator delegates through this instead of the in-process Agent tool so
-# each squad member is visible live in its own pane, off the coordinator's own.
+# Runs a real `claude` session as the named agent (from ~/.claude/agents/<agent>.md)
+# through pane-exec, so each squad member shows live in its own pane of the squad
+# tab, and prints its output. The coordinator delegates through this instead of the
+# in-process Agent tool. Outside herdr it runs claude inline.
 #
-# Outside herdr (HERDR_ENV != 1) it just runs claude inline — no pane.
-#
-# Env knobs:
+# Env knobs (plus pane-exec's SQUAD_ID, SQUAD_TAB, SQUAD_RATIO, SQUAD_KEEP_PANE):
 #   SQUAD_PERMISSION_MODE  claude --permission-mode (default: bypassPermissions)
 #   SQUAD_MODEL            claude --model (default: inherit)
-#   SQUAD_TIMEOUT          seconds to wait for completion (default: 900)
-#   SQUAD_RATIO            split ratio when adding a pane to the tab (default: 0.5)
-#   SQUAD_ID              squad identity (default: coordinator's HERDR_PANE_ID)
-#   SQUAD_TAB              tab label override (default: squad:<SQUAD_ID>)
-#   SQUAD_KEEP_PANE=1      leave the pane open after the agent finishes
 
 set -euo pipefail
 
@@ -42,107 +31,10 @@ if [ ! -f "$persona_file" ]; then
 fi
 
 mode="${SQUAD_PERMISSION_MODE:-bypassPermissions}"  # ponytail: headless claude can't answer prompts; bypass so squad agents actually run. Set SQUAD_PERMISSION_MODE=acceptEdits to tighten.
-timeout="${SQUAD_TIMEOUT:-900}"
 
 # Strip YAML frontmatter -> system prompt body.
 persona="$(awk 'BEGIN{f=0} /^---[[:space:]]*$/{f++;next} f>=2{print}' "$persona_file")"
 
-model_args=()
-[ -n "${SQUAD_MODEL:-}" ] && model_args=(--model "$SQUAD_MODEL")
-
-# Not in herdr: run inline, no pane.
-if [ "${HERDR_ENV:-}" != "1" ]; then
-  exec claude -p "$task" --append-system-prompt "$persona" --permission-mode "$mode" "${model_args[@]}" </dev/null
-fi
-
-work="$(mktemp -d "${TMPDIR:-/tmp}/squad.XXXXXX")"
-printf '%s' "$task" > "$work/task"
-printf '%s' "$persona" > "$work/persona"
-trap 'rm -rf "$work"' EXIT
-
-# The pane runs whatever shell (fish here), so cross no shell-quoting boundary:
-# write the command to a script and have the pane run that file. Arbitrary text
-# (task, persona) is read from files, never interpolated into a command line.
-{
-  echo '#!/usr/bin/env bash'
-  echo "claude -p \"\$(cat '$work/task')\" --append-system-prompt \"\$(cat '$work/persona')\" --permission-mode '$mode' ${SQUAD_MODEL:+--model '$SQUAD_MODEL'} </dev/null 2>&1 | tee '$work/out'"
-  echo "touch '$work/done'"
-} > "$work/run.sh"
-
-# Each squad gets its own tab; its agents live in that tab, one pane each — not
-# stacked into the coordinator's pane. A squad = the coordinator that launches
-# it, so key the tab on the coordinator session (HERDR_PANE_ID); set SQUAD_ID to
-# name distinct squads explicitly. Find-or-create the tab, then add a pane for
-# this agent. A mkdir lock serializes discovery/creation so parallel squad calls
-# don't each create a rival tab.
-if [ -z "${HERDR_WORKSPACE_ID:-}" ]; then
-  echo "squad: HERDR_WORKSPACE_ID unset; can't place squad tab" >&2
-  exit 1
-fi
-squad_id="${SQUAD_ID:-${HERDR_PANE_ID:-$$}}"
-tab_label="${SQUAD_TAB:-squad:$squad_id}"
-lock="${TMPDIR:-/tmp}/squad-tab-${HERDR_WORKSPACE_ID}-${tab_label//[^A-Za-z0-9]/_}.lock"
-
-# Close this agent's pane on any exit, and the squad tab too once no agents
-# remain in it. In the EXIT trap so an interrupted or killed squad still tears
-# its pane down instead of leaking it.
-teardown() {
-  [ -z "${pane_id:-}" ] && return 0
-  [ "${SQUAD_KEEP_PANE:-}" = "1" ] && return 0
-  herdr pane close "$pane_id" >/dev/null 2>&1 || true
-  local remaining
-  remaining="$(herdr pane list --workspace "$HERDR_WORKSPACE_ID" 2>/dev/null | python3 -c "
-import sys,json
-tab,me=sys.argv[1],sys.argv[2]
-try: panes=json.load(sys.stdin)['result']['panes']
-except Exception: sys.exit(0)
-print(sum(1 for p in panes if p['tab_id']==tab and p['pane_id']!=me))" "$tab_id" "$pane_id" 2>/dev/null || echo 1)"
-  [ "$remaining" = "0" ] && herdr tab close "$tab_id" >/dev/null 2>&1 || true
-}
-trap 'teardown; rmdir "$lock" 2>/dev/null || true; rm -rf "$work"' EXIT
-trap 'exit 143' TERM INT HUP  # turn a kill into a clean exit so EXIT tears down
-while ! mkdir "$lock" 2>/dev/null; do sleep 0.2; done
-
-tab_id="$(herdr tab list --workspace "$HERDR_WORKSPACE_ID" | python3 -c "
-import sys,json
-label=sys.argv[1]
-tabs=json.load(sys.stdin)['result']['tabs']
-print(next((t['tab_id'] for t in tabs if t['label']==label), ''))" "$tab_label")"
-
-# A live pane in the squad tab means we split it to add this agent; otherwise
-# (no tab, or a stale empty one) we create the tab and take its initial pane.
-src_pane=""
-if [ -n "$tab_id" ]; then
-  src_pane="$(herdr pane list --workspace "$HERDR_WORKSPACE_ID" | python3 -c "
-import sys,json
-tab=sys.argv[1]
-panes=json.load(sys.stdin)['result']['panes']
-print(next((p['pane_id'] for p in panes if p['tab_id']==tab), ''))" "$tab_id")"
-fi
-if [ -n "$src_pane" ]; then
-  split_json="$(herdr pane split "$src_pane" --direction down --ratio "${SQUAD_RATIO:-0.5}" --no-focus)"
-  pane_id="$(printf '%s' "$split_json" | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')"
-else
-  # No usable tab: tear down any stale empty one, then create fresh.
-  [ -n "$tab_id" ] && herdr tab close "$tab_id" >/dev/null 2>&1 || true
-  create_json="$(herdr tab create --workspace "$HERDR_WORKSPACE_ID" --label "$tab_label" --cwd "$PWD" --no-focus)"
-  pane_id="$(printf '%s' "$create_json" | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"]["root_pane"]["pane_id"])')"
-  tab_id="$(printf '%s' "$create_json" | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"]["tab"]["tab_id"])')"
-fi
-rmdir "$lock" 2>/dev/null || true
-
-herdr pane rename "$pane_id" "squad:$agent" >/dev/null 2>&1 || true
-herdr pane run "$pane_id" "bash $work/run.sh" >/dev/null
-
-# Wait for the done sentinel (teardown runs from the EXIT trap either way).
-waited=0
-while [ ! -f "$work/done" ]; do
-  sleep 1
-  waited=$((waited + 1))
-  if [ "$waited" -ge "$timeout" ]; then
-    echo "squad: $agent timed out after ${timeout}s" >&2
-    exit 1
-  fi
-done
-
-cat "$work/out"
+exec "$(dirname "$0")/pane-exec" "$agent" \
+  claude -p "$task" --append-system-prompt "$persona" --permission-mode "$mode" \
+  ${SQUAD_MODEL:+--model "$SQUAD_MODEL"} </dev/null

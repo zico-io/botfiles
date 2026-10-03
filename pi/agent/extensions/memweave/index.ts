@@ -4,7 +4,7 @@
  * Inspired by memweave (github.com/sachinsharma9780/memweave).
  * Uses Python stdlib only — no numpy, no embeddings, no external services.
  *
- * Tools provided: mem_search, mem_write, mem_list, mem_stats, mem_rebuild
+ * Tools provided: mem_search, mem_write, mem_list, mem_rebuild
  */
 
 import { spawn } from "node:child_process";
@@ -15,37 +15,16 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 const WORKSPACE = process.cwd();
 const MEM_SCRIPT = path.resolve(WORKSPACE, "scripts/mem.py");
 
-// ponytail: try python3.12 then python3; execSync("which") resolves paths that don't survive into spawn
-
-async function spawnMem(
-	args: string[],
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-	// ponytail: try python3.12 then python3 — which(1) paths don't survive the spawn namespace
-	for (const bin of ["python3.12", "python3"]) {
-		try {
-			return await new Promise((resolve, reject) => {
-				const proc = spawn(bin, [MEM_SCRIPT, ...args], {
-					cwd: WORKSPACE,
-					env: { ...process.env, PYTHONUNBUFFERED: "1" },
-				});
-				let stdout = "";
-				let stderr = "";
-				proc.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
-				proc.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
-				proc.on("error", (err) => reject(err));
-				proc.on("close", (code: number | null) => {
-					resolve({ stdout, stderr, exitCode: code ?? 1 });
-				});
-			});
-		} catch {
-			// try next binary
-		}
-	}
-	throw new Error("no python binary found");
-}
-
-function runMem(args: string[]) {
-	return spawnMem(args);
+function runMem(args: string[]): Promise<{ stdout: string; stderr: string }> {
+	return new Promise((resolve, reject) => {
+		const proc = spawn("python3", [MEM_SCRIPT, ...args], { cwd: WORKSPACE });
+		let stdout = "";
+		let stderr = "";
+		proc.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
+		proc.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
+		proc.on("error", reject);
+		proc.on("close", () => resolve({ stdout, stderr }));
+	});
 }
 
 export default function (pi: ExtensionAPI) {
@@ -127,18 +106,6 @@ export default function (pi: ExtensionAPI) {
 			return {
 				content: [{ type: "text", text: stdout || "(no indexed files)" }],
 			};
-		},
-	});
-
-	// ── mem_stats ──
-	pi.registerTool({
-		name: "mem_stats",
-		description:
-			"Show memory system statistics: file count, chunk count, DB size.",
-		parameters: Type.Object({}),
-		async execute() {
-			const { stdout } = await runMem(["stats"]);
-			return { content: [{ type: "text", text: stdout }] };
 		},
 	});
 

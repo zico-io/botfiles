@@ -12,16 +12,12 @@ Usage:
 Store: pi/memory/*.md  |  Index: pi/memory.db
 """
 
-import hashlib
 import re
 import sqlite3
 import sys
 import textwrap
-from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-
-import numpy as np
 
 BOTFILES = Path(__file__).resolve().parent.parent
 MEMORY_DIR = BOTFILES / "pi" / "memory"
@@ -36,8 +32,6 @@ def get_db() -> sqlite3.Connection:
         "CREATE TABLE IF NOT EXISTS chunks ("
         "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
         "  filepath TEXT NOT NULL,"
-        "  content_hash TEXT NOT NULL,"
-        "  chunk_idx INTEGER NOT NULL,"
         "  text TEXT NOT NULL,"
         "  start_line INTEGER NOT NULL,"
         "  end_line INTEGER NOT NULL,"
@@ -56,17 +50,8 @@ def get_db() -> sqlite3.Connection:
         CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
             INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
         END""")
-    db.execute("""
-        CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
-            INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
-            INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
-        END""")
     db.commit()
     return db
-
-
-def _hash(text: str) -> str:
-    return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
 def _is_dated(filename: str) -> bool:
@@ -118,7 +103,6 @@ def cmd_add(filepath: str) -> None:
         sys.exit(1)
 
     text = fp.read_text(encoding="utf-8")
-    content_hash = _hash(text)
     rel = str(_relative(fp))
     mtime = fp.stat().st_mtime
 
@@ -126,11 +110,10 @@ def cmd_add(filepath: str) -> None:
     # remove old chunks for this file
     db.execute("DELETE FROM chunks WHERE filepath = ?", (rel,))
     chunks = chunk_markdown(text)
-    for idx, (start, end, chunk_text) in enumerate(chunks):
+    for start, end, chunk_text in chunks:
         db.execute(
-            "INSERT INTO chunks (filepath, content_hash, chunk_idx, text, start_line, end_line, mtime) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (rel, content_hash, idx, chunk_text, start, end, mtime),
+            "INSERT INTO chunks (filepath, text, start_line, end_line, mtime) VALUES (?, ?, ?, ?, ?)",
+            (rel, chunk_text, start, end, mtime),
         )
     db.commit()
     db.close()
@@ -146,163 +129,37 @@ def cmd_write(name: str, content: str) -> None:
 
 
 def cmd_search(query: str) -> None:
-    """Hybrid search: FTS5 BM25 → TF-IDF cosine merge → temporal decay → MMR re-rank."""
+    """FTS5 BM25 ranking, weighted by temporal decay."""
     db = get_db()
     rows = _fts_query(db, query, limit=50)
-
+    db.close()
     if not rows:
         print("no results")
-        db.close()
         return
-
-    # Unpack: (filepath, chunk_idx, text, start_line, end_line, mtime, bm25)
-    texts = [r[2] for r in rows]
-
-    # -- TF-IDF cosine similarity (numpy vector leg) --
-    tfidf, vocab, idf_vec = _build_tfidf(texts)
-    qvec = _query_tfidf(query, vocab, idf_vec)
-    cos_sims = tfidf @ qvec  # (n,)
-
-    # -- Hybrid merge: 0.5 × BM25 + 0.5 × TF-IDF cosine --
-    bm25_scores = np.array([1.0 / (1.0 + abs(r[6])) for r in rows])
-    bm25_norm = bm25_scores / (bm25_scores.max() or 1)
-    cos_norm = (cos_sims - cos_sims.min()) / (cos_sims.max() - cos_sims.min() + 1e-9)
-    hybrid = 0.5 * bm25_norm + 0.5 * cos_norm
-
-    # -- Temporal decay --
-    decays = np.array([_decay_weight(r[0]) for r in rows])
-    scored = hybrid * decays
-
-    # -- MMR re-rank for diversity --
-    order = _mmr_rerank(qvec, tfidf, scored, top_k=10)
-
-    db.close()
-
-    for rank, idx in enumerate(order):
-        fp, _cidx, text, sl, el, _mtime, _bm = rows[idx]
-        snippet = textwrap.shorten(text, width=120, placeholder="…")
-        print(f"[{scored[idx]:.3f}] {snippet}")
-        print(f"       ← {fp}:{sl}-{el}")
-        if rank < len(order) - 1:
-            print()
-
-
-# ── numpy-powered TF-IDF + MMR pipeline ──
-
-
-def _tokenize(text: str) -> list[str]:
-    return re.findall(r"\b[a-zA-Z0-9]+\b", text.lower())
-
-
-def _build_tfidf(documents: list[str]) -> tuple[np.ndarray, dict[str, int], np.ndarray]:
-    """Build L2-normalized TF-IDF matrix. Returns (matrix, vocab, idf)."""
-    tokenized = [_tokenize(d) for d in documents]
-    vocab: dict[str, int] = {}
-    for tokens in tokenized:
-        for t in tokens:
-            vocab.setdefault(t, len(vocab))
-
-    n_docs = len(documents)
-    n_terms = len(vocab)
-    if n_terms == 0:
-        return np.zeros((n_docs, 1)), {}, np.zeros(1)
-
-    # TF
-    tf = np.zeros((n_docs, n_terms))
-    for i, tokens in enumerate(tokenized):
-        counts = Counter(tokens)
-        for t, c in counts.items():
-            tf[i, vocab[t]] = c / len(tokens)
-
-    # IDF
-    df = np.zeros(n_terms)
-    for tokens in tokenized:
-        for t in set(tokens):
-            df[vocab[t]] += 1
-    idf_vec = np.log((n_docs + 1) / (df + 1)) + 1
-
-    # TF-IDF + L2 normalize
-    tfidf = tf * idf_vec
-    norms = np.linalg.norm(tfidf, axis=1, keepdims=True)
-    norms[norms == 0] = 1
-    return tfidf / norms, vocab, idf_vec
-
-
-def _query_tfidf(query: str, vocab: dict[str, int], idf_vec: np.ndarray) -> np.ndarray:
-    """Build L2-normalized TF-IDF vector for query."""
-    tokens = _tokenize(query)
-    if not tokens or not vocab:
-        return np.zeros(len(vocab) or 1)
-    counts = Counter(tokens)
-    vec = np.zeros(len(vocab))
-    n_tokens = len(tokens)
-    for t, c in counts.items():
-        if t in vocab:
-            vec[vocab[t]] = (c / n_tokens) * idf_vec[vocab[t]]
-    norm = np.linalg.norm(vec)
-    if norm > 0:
-        vec /= norm
-    return vec
-
-
-def _mmr_rerank(
-    query_vec: np.ndarray,
-    chunk_vecs: np.ndarray,
-    relevance: np.ndarray,
-    top_k: int = 10,
-    lambda_param: float = 0.7,
-) -> list[int]:
-    """MMR re-ranking: balance relevance against diversity.
-
-    relevance is the pre-computed score per chunk (hybrid × decay).
-    lambda_param: 1.0 = pure relevance, 0.0 = pure diversity.
-    """
-    n = chunk_vecs.shape[0]
-    if n <= 1:
-        return list(range(n))
-
-    sim_chunks = chunk_vecs @ chunk_vecs.T  # (n, n) pairwise cosine
-    selected: list[int] = []
-    remaining = list(range(n))
-
-    for _ in range(min(top_k, n)):
-        if not selected:
-            best = int(np.argmax(relevance))
-            selected.append(best)
-            remaining.remove(best)
-            continue
-
-        max_sim_to_selected = np.array(
-            [sim_chunks[i, selected].max() for i in remaining]
-        )
-        mmr_scores = (
-            lambda_param * relevance[remaining]
-            - (1 - lambda_param) * max_sim_to_selected
-        )
-        best = remaining[int(np.argmax(mmr_scores))]
-        selected.append(best)
-        remaining.remove(best)
-
-    return selected
+    # FTS5 rank is negated BM25: more negative is a better match.
+    scored = sorted(
+        ((-bm25 * _decay_weight(fp), fp, text, sl, el) for fp, text, sl, el, bm25 in rows),
+        reverse=True,
+    )[:10]
+    print("\n\n".join(
+        f"[{score:.3f}] {textwrap.shorten(text, width=120, placeholder='…')}\n       ← {fp}:{sl}-{el}"
+        for score, fp, text, sl, el in scored
+    ))
 
 
 def _fts_query(db: sqlite3.Connection, query: str, limit: int = 20) -> list:
-    """Try phrase match, then AND, then OR."""
+    """Try all terms (AND), then any term (OR)."""
     safe = query.replace('"', '""')
     terms = [t for t in safe.split() if len(t) > 0]
     if not terms:
         return []
 
-    strategies = [
-        " ".join(f'"{t}"' for t in terms),
-        " AND ".join(terms),
-        " OR ".join(terms),
-    ]
+    quoted = [f'"{t}"' for t in terms]
+    strategies = [" ".join(quoted), " OR ".join(quoted)]
     for fts_query in strategies:
         try:
             rows = db.execute(
-                "SELECT c.filepath, c.chunk_idx, c.text, c.start_line, c.end_line, c.mtime, "
-                "       fts.rank AS bm25 "
+                "SELECT c.filepath, c.text, c.start_line, c.end_line, fts.rank "
                 "FROM chunks_fts fts "
                 "JOIN chunks c ON c.id = fts.rowid "
                 "WHERE chunks_fts MATCH ? "
@@ -320,13 +177,13 @@ def _fts_query(db: sqlite3.Connection, query: str, limit: int = 20) -> list:
 def cmd_list() -> None:
     db = get_db()
     rows = db.execute(
-        "SELECT filepath, content_hash, COUNT(*) as chunks, MAX(mtime) "
+        "SELECT filepath, COUNT(*) as chunks, MAX(mtime) "
         "FROM chunks GROUP BY filepath ORDER BY filepath"
     ).fetchall()
     if not rows:
         print("no indexed files")
     else:
-        for fp, _h, n, mtime in rows:
+        for fp, n, mtime in rows:
             ts = (
                 datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
                 if mtime

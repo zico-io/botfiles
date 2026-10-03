@@ -60,8 +60,8 @@ this review step before calling the mission done. Never skip this.
    \`git diff HEAD > /workspace/mission-review.patch\`
    (Use absolute /workspace path so review's path translation handles Gondolin.)
 
-2. Open the diff for the user to review in hunk's TUI:
-   Use the \`review\` tool with \`kind: "patch"\`, \`files: ["/workspace/mission-review.patch"]\`.
+2. Open the diff for the user to review:
+   Use the \`review\` tool with \`path: "/workspace/mission-review.patch"\`.
    This spawns a herdr side pane showing the diff.
 
 3. Wait for the user's explicit approval:
