@@ -2,6 +2,7 @@
   "skills": [
     "../skills",
     "~/.claude/skills",
+    "~/.claude/toolbox-skills",
     "~/.claude/commands"
   ],
   "plugins": [
