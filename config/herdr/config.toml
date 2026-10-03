@@ -1,0 +1,77 @@
+onboarding = false
+
+[terminal]
+default_shell="fish"
+
+[experimental]
+kitty_graphics = true
+switch_ascii_input_source_in_prefix = false
+
+[theme]
+name = "terminal"
+auto_switch = false
+
+# Background notification popup delivery. herdr = in-app toasts
+# (shown inside herdr — used by scripts/review-pane).
+[ui.toast]
+delivery = "herdr"
+
+[ui.toast.herdr]
+position = "top-right"
+
+[keys]
+# Agent motions - herdr ships these unset. prefix+ctrl+n/p mirrors vim's own
+# next/previous.
+next_agent = "prefix+ctrl+n"
+previous_agent = "prefix+ctrl+p"
+focus_agent = "prefix+alt+1..9"
+
+prefix = "ctrl+a"
+
+[[keys.command]]
+key = "prefix+f"
+type = "shell"
+command = "herdr plugin action invoke open-file-viewer --plugin herdr-file-viewer"
+
+[[keys.command]]
+key = "prefix+shift+f"
+type = "shell"
+command = "herdr plugin action invoke open-file-viewer-tab --plugin herdr-file-viewer"
+
+# PR/branch -> worktree workspace. prefix+p and prefix+shift+p are taken by
+# herdr's previous_tab and rename_pane, hence shift+o ("open PR").
+[[keys.command]]
+key = "prefix+shift+o"
+type = "plugin_action"
+command = "open-pr-worktree"
+
+# Same plugin, new branch off a base ("new").
+[[keys.command]]
+key = "prefix+shift+n"
+type = "plugin_action"
+command = "create-worktree"
+
+# Per-workspace markdown scratchpad ("idea"). prefix+n is next_tab, prefix+m is
+# mem-browse below, hence i.
+[[keys.command]]
+key = "prefix+i"
+type = "plugin_action"
+command = "open-notes"
+
+# botfiles scripts — type = "pane" opens a temp pane and closes it on exit.
+[[keys.command]]
+key = "prefix+m"
+type = "pane"
+command = "/Users/percules/git/botfiles/scripts/mem-browse"
+
+# review the focused pane's repo diff (env -u HERDR_ENV → review-pane renders
+# inline; herdr's temp pane supplies the pane + close-on-exit).
+[[keys.command]]
+key = "prefix+d"
+type = "pane"
+command = "env -u HERDR_ENV /Users/percules/git/botfiles/scripts/review-pane --diff"
+
+# alt+1..9 jumps straight to agent row N (ralph-digest lane N). Must sit at
+# end-of-file: a table header captures every key that follows it.
+[keys.indexed]
+agents = "alt"

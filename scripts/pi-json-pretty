@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""Render pi's --mode json event stream as a readable live feed for a pane.
+
+Reads one JSON event per line on stdin (the raw stream pi emits) and prints a
+compact human view. Never raises on bad input: non-JSON lines (e.g. a claude
+squad's plain text) pass through as-is, and events it can't render are skipped
+so the pane keeps flowing even if the schema drifts. The raw stream is
+captured elsewhere (pane-exec tees it before this filter), so this only shapes
+what a human sees, never what the subagent tool parses.
+"""
+import json
+import sys
+
+DIM = "\033[2m"
+CYAN = "\033[36m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+RESET = "\033[0m"
+
+
+def preview(value, limit=80):
+    text = " ".join(str(value).split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def fmt_usage(usage):
+    if not isinstance(usage, dict):
+        return ""
+    parts = []
+    if usage.get("input"):
+        parts.append(f"↑{usage['input']}")
+    if usage.get("output"):
+        parts.append(f"↓{usage['output']}")
+    cost = usage.get("cost")
+    if isinstance(cost, dict) and cost.get("total"):
+        parts.append(f"${cost['total']:.4f}")
+    return f"{DIM}[{' '.join(parts)}]{RESET}" if parts else ""
+
+
+def emit(line):
+    sys.stdout.write(line + "\n")
+    sys.stdout.flush()
+
+
+def handle(event):
+    etype = event.get("type")
+    message = event.get("message")
+    if not isinstance(message, dict):
+        return
+    if etype == "message_end" and message.get("role") == "assistant":
+        for part in message.get("content") or []:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "text" and part.get("text", "").strip():
+                emit(part["text"].rstrip())
+            elif part.get("type") == "toolCall":
+                args = part.get("arguments") or {}
+                arg = args.get("command") or args.get("file_path") or args.get("path") or args.get("pattern") or ""
+                emit(f"{CYAN}→ {part.get('name', 'tool')}{RESET} {DIM}{preview(arg)}{RESET}".rstrip())
+        usage = fmt_usage(message.get("usage"))
+        if usage:
+            emit(usage)
+    elif etype == "tool_result_end":
+        for part in message.get("content") or []:
+            if isinstance(part, dict) and part.get("type") == "text" and part.get("text", "").strip():
+                emit(f"{GREEN}✓{RESET} {DIM}{preview(part['text'])}{RESET}")
+                return
+        emit(f"{GREEN}✓{RESET} {DIM}done{RESET}")
+
+
+for raw in iter(sys.stdin.readline, ""):
+    try:
+        handle(json.loads(raw))
+    except ValueError:
+        emit(raw.rstrip("\n"))
+    except Exception:
+        continue

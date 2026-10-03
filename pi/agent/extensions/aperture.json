@@ -1,0 +1,40 @@
+{
+  "$schema": "https://unpkg.com/@aliou/pi-ts-aperture@0.8.2/schema.json",
+  "baseUrl": "https://ai.dragon-draco.ts.net",
+  "onboardingDone": true,
+  "onboarding": {
+    "enabled": false
+  },
+  "proxy": {
+    "enabled": true,
+    "upstreamProviders": []
+  },
+  "dedicated": {
+    "enabled": true,
+    "providers": [
+      {
+        "id": "anthropic-sub",
+        "name": "Anthropic (Subscription)",
+        "enabled": true
+      },
+      {
+        "id": "bask",
+        "name": "",
+        "enabled": false
+      },
+      {
+        "id": "openai",
+        "name": "",
+        "enabled": false
+      },
+      {
+        "id": "vercel",
+        "name": "Vercel AI Gateway",
+        "enabled": true
+      }
+    ]
+  },
+  "connectors": {
+    "enabled": true
+  }
+}

@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# squad - run a Claude Code squad agent in the squad's own herdr tab.
+#
+#   scripts/squad <agent> <task...>
+#
+# Runs a real `claude` session as the named agent (from ~/.claude/agents/<agent>.md)
+# through pane-exec, so each squad member shows live in its own pane of the squad
+# tab, and prints its output. The coordinator delegates through this instead of the
+# in-process Agent tool. Outside herdr it runs claude inline.
+#
+# Env knobs (plus pane-exec's SQUAD_ID, SQUAD_TAB, SQUAD_RATIO, SQUAD_KEEP_PANE):
+#   SQUAD_PERMISSION_MODE  claude --permission-mode (default: bypassPermissions)
+#   SQUAD_MODEL            claude --model (default: inherit)
+
+set -euo pipefail
+
+agent="${1:-}"
+shift || true
+task="$*"
+
+if [ -z "$agent" ] || [ -z "$task" ]; then
+  echo "usage: squad <agent> <task...>" >&2
+  exit 2
+fi
+
+persona_file="$HOME/.claude/agents/$agent.md"
+if [ ! -f "$persona_file" ]; then
+  echo "squad: unknown agent '$agent' (no $persona_file)" >&2
+  echo "available: $(cd "$HOME/.claude/agents" 2>/dev/null && ls *.md 2>/dev/null | sed 's/.md//' | tr '\n' ' ')" >&2
+  exit 2
+fi
+
+mode="${SQUAD_PERMISSION_MODE:-bypassPermissions}"  # ponytail: headless claude can't answer prompts; bypass so squad agents actually run. Set SQUAD_PERMISSION_MODE=acceptEdits to tighten.
+
+# Strip YAML frontmatter -> system prompt body.
+persona="$(awk 'BEGIN{f=0} /^---[[:space:]]*$/{f++;next} f>=2{print}' "$persona_file")"
+
+exec "$(dirname "$0")/pane-exec" "$agent" \
+  claude -p "$task" --append-system-prompt "$persona" --permission-mode "$mode" \
+  ${SQUAD_MODEL:+--model "$SQUAD_MODEL"} </dev/null

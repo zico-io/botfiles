@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# pane-exec — run a command live in its own herdr pane while relaying the
+# command's combined output to pane-exec's OWN stdout. A parent that captures
+# pane-exec's stdout sees exactly what it would have seen running the command
+# directly, so it stays a transparent wrapper (the pi subagent tool prepends it
+# to the `pi` invocation to make each delegated agent visible in a pane).
+#
+#   pane-exec <label> <cmd> [args...]
+#
+# Each caller's panes land in a shared squad tab (keyed on the coordinator
+# session), one pane per agent — same placement logic as scripts/squad. Exits
+# with the wrapped command's exit code.
+#
+# Outside herdr (HERDR_ENV != 1) or without a workspace, execs the command
+# directly — no pane, fully transparent.
+#
+# Env knobs (shared with scripts/squad):
+#   SQUAD_ID          squad identity → tab grouping (default: coordinator HERDR_PANE_ID)
+#   SQUAD_TAB         tab label override (default: squad:<SQUAD_ID>)
+#   SQUAD_RATIO       split ratio for added panes (default: 0.5)
+#   SQUAD_KEEP_PANE=1 leave the pane open after the command finishes
+
+set -euo pipefail
+
+label="${1:-agent}"
+shift || true
+if [ "$#" -eq 0 ]; then
+  echo "usage: pane-exec <label> <cmd> [args...]" >&2
+  exit 2
+fi
+
+# Transparent passthrough when we can't place a pane.
+if [ "${HERDR_ENV:-}" != "1" ] || [ -z "${HERDR_WORKSPACE_ID:-}" ]; then
+  exec "$@"
+fi
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/pane-exec.XXXXXX")"
+
+# Serialize argv NUL-delimited so the pane shell runs it across no quoting
+# boundary — arbitrary task text never touches a command line.
+: > "$work/argv"
+for a in "$@"; do printf '%s\0' "$a" >> "$work/argv"; done
+
+# Pane display filter: prettify pi's JSON stream for humans if we can, else show
+# it raw. This only shapes the pane; `out` is always the raw stream (teed before
+# the filter) so the parent's parser never sees prettified text.
+pretty="$(cd "$(dirname "$0")" && pwd)/pi-json-pretty"
+if [ -x "$pretty" ] && command -v python3 >/dev/null 2>&1; then
+  display="python3 $(printf '%q' "$pretty")"
+else
+  display="cat"
+fi
+
+target_cwd="$PWD"
+{
+  echo '#!/usr/bin/env bash'
+  echo "cd $(printf '%q' "$target_cwd") || exit 1"
+  # bash 3.2 (macOS system bash) has no mapfile; read NUL-delimited argv by hand.
+  echo "argv=(); while IFS= read -r -d '' a; do argv+=(\"\$a\"); done < $(printf '%q' "$work/argv")"
+  # tee captures the raw stream for the relay; the display filter only prettifies
+  # what the pane shows.
+  echo "\"\${argv[@]}\" 2>&1 | tee $(printf '%q' "$work/out") | $display"
+  echo "printf %s \"\${PIPESTATUS[0]}\" > $(printf '%q' "$work/exitcode")"
+  echo "touch $(printf '%q' "$work/done")"
+} > "$work/run.sh"
+
+squad_id="${SQUAD_ID:-${HERDR_PANE_ID:-$$}}"
+tab_label="${SQUAD_TAB:-squad:$squad_id}"
+lock="${TMPDIR:-/tmp}/squad-tab-${HERDR_WORKSPACE_ID}-${tab_label//[^A-Za-z0-9]/_}.lock"
+
+pane_id=""
+tab_id=""
+# Close this agent's pane on any exit, and the squad tab too once no agents
+# remain — so an interrupted or killed wrapper still tears its pane down.
+teardown() {
+  [ -z "${pane_id:-}" ] && return 0
+  [ "${SQUAD_KEEP_PANE:-}" = "1" ] && return 0
+  herdr pane close "$pane_id" >/dev/null 2>&1 || true
+  local remaining
+  remaining="$(herdr pane list --workspace "$HERDR_WORKSPACE_ID" 2>/dev/null | python3 -c "
+import sys,json
+tab,me=sys.argv[1],sys.argv[2]
+try: panes=json.load(sys.stdin)['result']['panes']
+except Exception: sys.exit(0)
+print(sum(1 for p in panes if p['tab_id']==tab and p['pane_id']!=me))" "$tab_id" "$pane_id" 2>/dev/null || echo 1)"
+  [ "$remaining" = "0" ] && herdr tab close "$tab_id" >/dev/null 2>&1 || true
+}
+trap 'teardown; rmdir "$lock" 2>/dev/null || true; rm -rf "$work"' EXIT
+trap 'exit 143' TERM INT HUP  # turn a kill into a clean exit so EXIT tears down
+
+# Find-or-create the squad tab, then add a pane for this agent. A mkdir lock
+# serializes discovery/creation so parallel callers don't each make a rival tab.
+while ! mkdir "$lock" 2>/dev/null; do sleep 0.2; done
+
+tab_id="$(herdr tab list --workspace "$HERDR_WORKSPACE_ID" | python3 -c "
+import sys,json
+label=sys.argv[1]
+tabs=json.load(sys.stdin)['result']['tabs']
+print(next((t['tab_id'] for t in tabs if t['label']==label), ''))" "$tab_label")"
+
+src_pane=""
+if [ -n "$tab_id" ]; then
+  src_pane="$(herdr pane list --workspace "$HERDR_WORKSPACE_ID" | python3 -c "
+import sys,json
+tab=sys.argv[1]
+panes=json.load(sys.stdin)['result']['panes']
+print(next((p['pane_id'] for p in panes if p['tab_id']==tab), ''))" "$tab_id")"
+fi
+if [ -n "$src_pane" ]; then
+  split_json="$(herdr pane split "$src_pane" --direction down --ratio "${SQUAD_RATIO:-0.5}" --no-focus)"
+  pane_id="$(printf '%s' "$split_json" | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')"
+else
+  [ -n "$tab_id" ] && herdr tab close "$tab_id" >/dev/null 2>&1 || true
+  create_json="$(herdr tab create --workspace "$HERDR_WORKSPACE_ID" --label "$tab_label" --cwd "$target_cwd" --no-focus)"
+  pane_id="$(printf '%s' "$create_json" | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"]["root_pane"]["pane_id"])')"
+  tab_id="$(printf '%s' "$create_json" | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"]["tab"]["tab_id"])')"
+fi
+rmdir "$lock" 2>/dev/null || true
+
+herdr pane rename "$pane_id" "squad:$label" >/dev/null 2>&1 || true
+herdr pane run "$pane_id" "bash $work/run.sh" >/dev/null
+
+# Relay new bytes of the capture file to our stdout so the parent's stream
+# parser sees them live; a final pass after `done` flushes the remainder with
+# neither loss nor duplication (offset-tracked).
+offset=0
+relay() {
+  local size
+  size="$(wc -c 2>/dev/null < "$work/out" || echo 0)"
+  if [ "$size" -gt "$offset" ]; then
+    tail -c "+$((offset + 1))" "$work/out"
+    offset="$size"
+  fi
+}
+while [ ! -f "$work/done" ]; do
+  relay
+  sleep 0.2
+done
+relay
+
+exit "$(cat "$work/exitcode" 2>/dev/null || echo 0)"

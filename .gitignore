@@ -1,2 +1,5 @@
 .botfile/derived/
 .DS_Store
+node_modules/
+# memweave search index, derived from pi/memory/*.md (rebuild with `scripts/mem.py rebuild`)
+pi/memory.db*

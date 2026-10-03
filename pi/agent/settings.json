@@ -1,0 +1,23 @@
+{
+  "lastChangelogVersion": "0.84.2",
+  "theme": "dark",
+  "packages": [
+    "npm:@aliou/pi-ts-aperture",
+    "npm:pi-ask-herdr",
+    "npm:@hypabolic/pi-hypa",
+    "npm:pi-lens",
+    "npm:@dietrichgebert/ponytail",
+    "npm:pi-mcp-adapter"
+  ],
+  "defaultProvider": "aperture",
+  "defaultModel": "deepseek/deepseek-v4-pro",
+  "defaultThinkingLevel": "medium",
+  "compaction": {
+    "enabled": true,
+    "reserveTokens": 16384,
+    "keepRecentTokens": 20000
+  },
+  "extensions": [
+    "-builtin:mcp"
+  ]
+}

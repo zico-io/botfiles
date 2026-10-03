@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-# provision.sh — wire this .botfiles SSOT into every harness's global config.
-# Idempotent: re-run any time. Symlinks so edits to AGENTS.md propagate live.
+# provision.sh — wire this repo into every harness's global config.
+# Idempotent: re-run any time. Symlinks so edits here propagate live.
 set -euo pipefail
 
 SSOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/AGENTS.md"
 [ -f "$SSOT" ] || { echo "missing $SSOT" >&2; exit 1; }
+ROOT="$(dirname "$SSOT")"
+# The old ~/.botfiles layout made ~/.pi itself a symlink; writing through it would
+# land in that repo. Move pi's runtime (auth.json, sessions/, npm/, ...) into a
+# real ~/.pi first.
+[ -L "$HOME/.pi" ] && { echo "$HOME/.pi is a symlink; make it a real dir first" >&2; exit 1; }
 
 # Claude Code, Codex, and Pi read AGENTS.md natively -> symlink straight to the SSOT.
 for dir in "$HOME/.claude" "$HOME/.codex" "$HOME/.pi/agent"; do
@@ -23,6 +28,41 @@ if [ -f "$PI_MODELS" ]; then
   echo "linked $HOME/.pi/agent/models.json -> $PI_MODELS"
 fi
 
+# Harness config (claude/, pi/, config/, launchd/): link each piece into place.
+# An existing real file or dir is moved to .bak instead of clobbered; ln -sfn
+# replaces an old link instead of nesting inside it. A missing source (the
+# sandbox image ships only AGENTS.md, skills/, and this script) is skipped.
+link() {
+  [ -e "$1" ] || return 0
+  mkdir -p "$(dirname "$2")"
+  if [ -e "$2" ] && [ ! -L "$2" ]; then mv "$2" "$2.bak" && echo "backed up $2 -> $2.bak"; fi
+  ln -sfn "$1" "$2"
+  echo "linked $2 -> $1"
+}
+for d in agents commands hooks; do link "$ROOT/claude/$d" "$HOME/.claude/$d"; done
+for f in agents extensions prompts settings.json; do link "$ROOT/pi/agent/$f" "$HOME/.pi/agent/$f"; done
+link "$ROOT/pi/missions" "$HOME/.pi/missions"
+link "$ROOT/config/herdr/config.toml" "$HOME/.config/herdr/config.toml"
+# Extension deps are not committed; install any that are missing.
+if command -v npm >/dev/null 2>&1; then
+  for pkg in "$ROOT"/pi/agent/extensions/*/package.json; do
+    [ -f "$pkg" ] || continue
+    d="$(dirname "$pkg")"
+    if grep -q '"dependencies"' "$pkg" && [ ! -d "$d/node_modules" ]; then
+      (cd "$d" && npm install --no-audit --no-fund --silent) && echo "installed deps in $d"
+    fi
+  done
+fi
+if [ "$(uname)" = Darwin ]; then
+  for plist in "$ROOT"/launchd/*.plist; do
+    [ -f "$plist" ] || continue
+    dest="$HOME/Library/LaunchAgents/$(basename "$plist")"
+    link "$plist" "$dest"
+    launchctl bootout "gui/$(id -u)" "$dest" 2>/dev/null || true
+    launchctl bootstrap "gui/$(id -u)" "$dest" && echo "loaded $(basename "$plist" .plist)"
+  done
+fi
+
 # skills/: served through the toolbox MCP server (bin/toolbox, which indexes
 # skills/ via toolbox/catalog.json) so they cost no context until searched.
 # Claude Code and Codex get the server registered; a harness that cannot reach
@@ -30,7 +70,6 @@ fi
 # gets each skill symlinked into its skills dir instead (ln -sfn replaces the
 # link instead of nesting on re-run). A harness switched to the toolbox has its
 # old links removed so no skill loads twice.
-ROOT="$(dirname "$SSOT")"
 TOOLBOX="$ROOT/bin/toolbox"
 for pair in "claude:$HOME/.claude/skills" "codex:$HOME/.codex/skills" "pi:$HOME/.pi/agent/skills"; do
   cli="${pair%%:*}" harness_dir="${pair#*:}"

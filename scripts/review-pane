@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# Open a herdr pane that renders markdown (glow) or a diff (delta) for review.
+#
+# ponytail: pane self-closes via an appended `; herdr pane close` on the SAME
+# command line — fish job control means ctrl+z only suspends the renderer, so the
+# shell never advances to the close; only a real exit does. No daemon, no PID track.
+#
+# Usage:
+#   review-pane FILE                 # .md/.markdown -> glow ; .diff/.patch -> delta ; else sniff
+#   review-pane --diff [git args...] # runs `git diff <args>` and renders with delta
+#   <something> | review-pane        # read stdin, sniff md vs diff
+set -euo pipefail
+
+SCRATCH="${TMPDIR:-/tmp}"
+TMP=""   # set only when we create a temp we own (and must clean up)
+
+# ── resolve target + mode ──────────────────────────────────────────────────────
+sniff() {  # stdin -> "diff" or "md"
+	if head -n 40 "$1" | grep -qE '^(diff --git |--- |\+\+\+ |@@ )'; then
+		echo diff
+	else
+		echo md
+	fi
+}
+
+# REVIEW_DIR = the directory the review is *about* (so we open the pane in that
+# worktree's herdr workspace, not wherever the agent's home pane lives).
+REVIEW_DIR="$PWD"
+if [ "${1:-}" = "--diff" ]; then
+	shift
+	TMP="$SCRATCH/review-pane.$$.diff"
+	git diff "$@" >"$TMP"
+	if [ ! -s "$TMP" ]; then
+		rm -f "$TMP"
+		echo "no changes"
+		exit 0
+	fi
+	TARGET="$TMP"; MODE=diff
+elif [ -n "${1:-}" ] && [ -f "$1" ]; then
+	TARGET="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"  # absolute
+	REVIEW_DIR="$(dirname "$TARGET")"
+	case "$TARGET" in
+		*.md|*.markdown) MODE=md ;;
+		*.diff|*.patch)  MODE=diff ;;
+		*)               MODE=$(sniff "$TARGET") ;;
+	esac
+elif [ ! -t 0 ]; then
+	TMP="$SCRATCH/review-pane.$$.in"
+	cat >"$TMP"
+	TARGET="$TMP"; MODE=$(sniff "$TMP")
+else
+	echo "usage: review-pane FILE | review-pane --diff [git args] | ... | review-pane" >&2
+	exit 1
+fi
+
+# ── renderer command (fish-safe, absolute, single-quoted) ──────────────────────
+if [ "$MODE" = diff ]; then
+	RENDER="delta --paging=always < '$TARGET'"; KIND=diff
+else
+	RENDER="glow -p '$TARGET'"; KIND=markdown
+fi
+
+# ── no herdr? render inline (still useful) ─────────────────────────────────────
+if [ "${HERDR_ENV:-}" != "1" ]; then
+	if [ "$MODE" = diff ]; then delta <"$TARGET"; else glow -p "$TARGET"; fi  # auto-page: plain when piped
+	[ -n "$TMP" ] && rm -f "$TMP"
+	exit 0
+fi
+
+# ── resolve which pane to split ────────────────────────────────────────────────
+# Match REVIEW_DIR to the herdr workspace whose worktree contains it, then split a
+# pane already living there. The agent's own $HERDR_PANE_ID can sit in a different
+# workspace than the worktree it's reviewing, so trusting it opens the pane in the
+# wrong window. Fall back to $HERDR_PANE_ID when nothing matches.
+REPO_ROOT="$(git -C "$REVIEW_DIR" rev-parse --show-toplevel 2>/dev/null || echo "$REVIEW_DIR")"
+
+# One python pass over both listings: pick the workspace whose worktree path is the
+# longest prefix of REPO_ROOT, a pane in it to split, and whether it's focused.
+read -r SRC_PANE TARGET_WS TARGET_FOCUSED <<EOF
+$(HERDR_REPO_ROOT="$REPO_ROOT" \
+  HERDR_WS_JSON="$(herdr workspace list)" \
+  HERDR_PANE_JSON="$(herdr pane list)" python3 - <<'PY'
+import os, json
+root = os.environ["HERDR_REPO_ROOT"].rstrip("/")
+ws = json.loads(os.environ["HERDR_WS_JSON"])["result"]["workspaces"]
+panes = json.loads(os.environ["HERDR_PANE_JSON"])["result"]["panes"]
+
+def contains(base):
+    base = (base or "").rstrip("/")
+    return base and (root == base or root.startswith(base + "/"))
+
+# best = deepest worktree path that contains REPO_ROOT
+best = max((w for w in ws if contains(w.get("worktree", {}).get("checkout_path"))),
+          key=lambda w: len(w["worktree"]["checkout_path"]), default=None)
+if not best:
+    print("")  # no match → caller falls back to $HERDR_PANE_ID
+else:
+    wsid = best["workspace_id"]
+    active = best.get("active_tab_id")
+    in_ws = [p for p in panes if p.get("workspace_id") == wsid]
+    # prefer a pane in the active tab; else any pane in the workspace
+    pane = next((p for p in in_ws if p.get("tab_id") == active), None) or (in_ws[0] if in_ws else None)
+    pid = pane["pane_id"] if pane else ""
+    print(pid, wsid, "1" if best.get("focused") else "0")
+PY
+)
+EOF
+
+if [ -z "$SRC_PANE" ]; then
+	SRC_PANE="$HERDR_PANE_ID"
+	TARGET_FOCUSED=$([ "${HERDR_WORKSPACE_ID:-}" = "$(herdr workspace list | python3 -c 'import sys,json;print(next((w["workspace_id"] for w in json.load(sys.stdin)["result"]["workspaces"] if w.get("focused")),""))')" ] && echo 1 || echo 0)
+	WS_LABEL="${HERDR_WORKSPACE_ID:-this}"
+else
+	WS_LABEL="$TARGET_WS"
+fi
+
+# Focus the review pane only if its workspace is the one the user is already viewing.
+if [ "$TARGET_FOCUSED" = "1" ]; then
+	FOCUS_FLAG=""; NOTIFY=""
+else
+	FOCUS_FLAG="--no-focus"; NOTIFY=1
+fi
+
+# shellcheck disable=SC2086  # FOCUS_FLAG is intentionally word-split (empty or --no-focus)
+PANE=$(herdr pane split "$SRC_PANE" --direction right $FOCUS_FLAG \
+	| python3 -c 'import sys,json;print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')
+
+CLOSE="herdr pane close '$PANE'"
+[ -n "$TMP" ] && CLOSE="rm -f '$TMP'; $CLOSE"   # only ever rm a temp we created
+herdr pane run "$PANE" "$RENDER ; $CLOSE"
+
+if [ -n "$NOTIFY" ]; then
+	herdr notification show "Review ready" \
+		--body "Rendered $KIND in the $WS_LABEL workspace" --sound request
+fi

@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# claude-sandbox — Claude Code with --dangerously-skip-permissions inside a gondolin
+# micro-VM. Filesystem contained to $PWD (mounted at /workspace); guest is throwaway.
+#
+# Usage:
+#   claude-sandbox [claude args...]     launch claude in the sandbox (default)
+#   claude-sandbox --hosts              show the effective network allowlist
+#   claude-sandbox --add-host H [H...]  allow host(s) (applies next launch)
+#   claude-sandbox --check HOST         probe a host from the sandbox, prompt to allow it
+#   CLAUDE_SANDBOX_ALLOW_ALL=1 claude-sandbox   allow ALL hosts (still handles POST)
+#
+# Network: gondolin only lets the guest reach allowlisted hosts, and blocks others
+# *immediately* (no hang/retry storm — fail fast). Base hosts below cover claude
+# itself; add more for WebFetch/git/npm targets. To escape an allowlist-induced
+# failure loop instantly, relaunch with CLAUDE_SANDBOX_ALLOW_ALL=1.
+set -euo pipefail
+export PATH="/opt/homebrew/bin:$PATH"          # qemu etc.
+NODE=/opt/homebrew/opt/node@26/bin/node        # gondolin needs node >= 23.6
+GONDOLIN="$HOME/.pi/agent/extensions/gondolin/node_modules/.bin/gondolin"
+PREFIX="$HOME/.cache/claude-sandbox"           # claude-code install (host-persisted)
+PROFILE="$HOME/.cache/claude-sandbox-profile"  # creds + config (host-persisted)
+HOSTS_FILE="$PREFIX/allowed-hosts.txt"         # user-added extra hosts
+HOST_CLAUDE="$HOME/.claude"                    # host config, shared read-only
+PREF_LINKS=(commands skills CLAUDE.md AGENTS.md)  # shared from host as live symlinks
+# settings.json is shared as a sanitized copy (see below), not a symlink.
+
+# Auth is NOT shared: the Claude login token lives in the macOS keychain, which the
+# Linux guest can't read (the host .credentials.json only holds MCP tokens). The
+# sandbox keeps its own login in $PROFILE — do /login once. Preferences below ARE
+# shared: host ~/.claude is mounted read-only and symlinked in. Set
+# CLAUDE_SANDBOX_NO_PREFS=1 to skip preference sharing.
+
+BASE_HOSTS=(api.anthropic.com platform.claude.com claude.ai console.anthropic.com statsig.anthropic.com)
+
+mkdir -p "$PREFIX" "$PROFILE"
+touch "$HOSTS_FILE"
+
+extra_hosts() { grep -vE '^[[:space:]]*(#|$)' "$HOSTS_FILE" 2>/dev/null | awk '{print $1}' | sort -u; }
+
+is_allowed() {  # $1 host — true if in base or extra list
+  printf '%s\n' "${BASE_HOSTS[@]}" | grep -qxF "$1" || extra_hosts | grep -qxF "$1"
+}
+
+add_host() {
+  local h changed=0
+  for h in "$@"; do
+    if is_allowed "$h"; then echo "already allowed: $h"
+    else echo "$h" >> "$HOSTS_FILE"; echo "added: $h"; changed=1; fi
+  done
+  [ "$changed" = 1 ] && echo "(applies on next launch)"
+  return 0
+}
+
+check_host() {  # $1 host-or-url — probe reachability (single try), prompt to add
+  local host="${1#*://}"; host="${host%%/*}"
+  echo "Checking reachability of $host (single attempt, 12s timeout)..."
+  local code
+  # Probe under real DNS (--dns open) so bogus hosts actually fail to resolve.
+  # A GET is fine here; only POST is broken on the no-allowlist path.
+  code=$("$NODE" "$GONDOLIN" bash --dns open \
+    -- sh -lc "apk add --no-cache curl >/dev/null 2>&1; curl -sS -o /dev/null -w '%{http_code}' --max-time 12 --retry 0 https://$host/ 2>/dev/null || true" \
+    </dev/null 2>/dev/null | tr -dc '0-9' | tail -c 3)
+  code="${code:-000}"
+  if [ "$code" = "000" ] || [ -z "$code" ]; then
+    echo "✗ $host did not respond (DNS/connection failed). Not adding."; return 1
+  fi
+  echo "✓ $host responded (HTTP $code)."
+  if is_allowed "$host"; then echo "already in the allowlist."; return 0; fi
+  printf "Add %s to the sandbox allowlist? [y/N] " "$host"
+  local ans=""; read -r ans || true
+  case "$ans" in [yY]*) add_host "$host";; *) echo "skipped.";; esac
+}
+
+case "${1:-}" in
+  --hosts)
+    echo "base hosts:"; printf '  %s\n' "${BASE_HOSTS[@]}"
+    echo "extra hosts ($HOSTS_FILE):"; extra_hosts | sed 's/^/  /' || true
+    [ "${CLAUDE_SANDBOX_ALLOW_ALL:-}" = 1 ] && echo "(CLAUDE_SANDBOX_ALLOW_ALL=1 → ALL hosts allowed this session)"
+    exit 0;;
+  --add-host) shift; [ $# -ge 1 ] || { echo "usage: claude-sandbox --add-host HOST..." >&2; exit 2; }; add_host "$@"; exit 0;;
+  --check)    shift; [ $# -eq 1 ] || { echo "usage: claude-sandbox --check HOST" >&2; exit 2; }; check_host "$1"; exit $?;;
+  -h|--help)  sed -n '2,/^set -euo/{/^set -euo/!p;}' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
+esac
+
+# Share host preferences via guest-resolvable symlinks into the profile.
+PREF_MOUNT=()
+if [ "${CLAUDE_SANDBOX_NO_PREFS:-}" != 1 ] && [ -d "$HOST_CLAUDE" ]; then
+  PREF_MOUNT=(--mount-hostfs "$HOST_CLAUDE:/root/.claude-host:ro")
+  # settings.json: sanitized copy — strip keys that reference absolute host paths
+  # (hooks/statusLine/plugins), which would error at startup inside the guest.
+  if [ -f "$HOST_CLAUDE/settings.json" ]; then
+    rm -f "$PROFILE/settings.json"   # replace any prior symlink (don't write through it)
+    python3 - "$HOST_CLAUDE/settings.json" "$PROFILE/settings.json" <<'PY' 2>/dev/null || true
+import json, sys
+d = json.load(open(sys.argv[1]))
+for k in ("hooks", "statusLine", "enabledPlugins", "extraKnownMarketplaces"):
+    d.pop(k, None)
+json.dump(d, open(sys.argv[2], "w"), indent=2)
+PY
+  fi
+  # everything else: live symlinks into the read-only host mount
+  for item in "${PREF_LINKS[@]}"; do
+    [ -e "$HOST_CLAUDE/$item" ] && ln -sfn "/root/.claude-host/$item" "$PROFILE/$item"
+  done
+fi
+
+# Build --allow-host args
+ALLOW_ARGS=()
+if [ "${CLAUDE_SANDBOX_ALLOW_ALL:-}" = 1 ]; then
+  ALLOW_ARGS=(--allow-host '*')
+else
+  for h in "${BASE_HOSTS[@]}"; do ALLOW_ARGS+=(--allow-host "$h"); done
+  while IFS= read -r h; do [ -n "$h" ] && ALLOW_ARGS+=(--allow-host "$h"); done < <(extra_hosts)
+fi
+
+exec "$NODE" "$GONDOLIN" bash \
+  --mount-hostfs "$PREFIX:/opt/claude" \
+  --mount-hostfs "$PROFILE:/root/.claude-cfg" \
+  ${PREF_MOUNT[@]+"${PREF_MOUNT[@]}"} \
+  --mount-hostfs "$PWD:/workspace" \
+  --cwd /workspace \
+  "${ALLOW_ARGS[@]}" \
+  --env IS_SANDBOX=1 \
+  --env CLAUDE_CONFIG_DIR=/root/.claude-cfg \
+  -- sh -lc 'exec /opt/claude/bin/claude --dangerously-skip-permissions "$@"' _ "$@"

@@ -1,0 +1,14 @@
+{
+	"name": "pi-extension-memweave",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	},
+	"devDependencies": {
+		"@types/node": "^26.1.1"
+	}
+}
