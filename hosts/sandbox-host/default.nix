@@ -67,6 +67,10 @@ in
     hostname = "sandbox-host";
     tags = [ "tag:sandbox-host" ];
     authKeyFile = lib.mkIf haveSecrets config.sops.secrets.tailscale-authkey.path;
+    # The personal tailnet above stays the operator path; this also puts the
+    # host on the bask.health tailnet, where puget's tofu/infra/tailnet owns
+    # tag:sandbox-host and the SSH rule onto it.
+    extraTailnets.bask.port = 41642;
   };
 
   services.microsandbox = {
