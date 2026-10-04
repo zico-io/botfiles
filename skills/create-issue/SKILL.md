@@ -25,8 +25,6 @@ target before filing.
 Load [the shared issue-intake skill](../issue-intake/SKILL.md) and follow its
 runtime adapter. It owns duplicate search, drafting, team routing and filing.
 Do not maintain separate description, status, priority or label policies here.
-A filing request authorizes the write; a draft/preview request does not. Honor
-an explicit review gate from the user.
 
 ## GitHub issues
 
@@ -87,7 +85,6 @@ GitHub issue body. Offer this whenever the user mentions the counterpart exists.
 
 ## Gotchas
 
-- `linear-issue` is the read/analyze skill; use `issue-intake` for Linear writes.
 - Resolve the target repository from its git remote rather than an assumed name.
 - After a write error, inspect the target before retrying to avoid duplicates.
 

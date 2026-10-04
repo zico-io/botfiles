@@ -1,3 +1,6 @@
+---
+description: Use when filing a new Linear issue a person asked for (a bug they hit, a feature request, a chore, 'capture this as a ticket'), or when asked in Slack to link the thread to an issue. Not for the work behind a pull request.
+---
 # Issue intake
 
 Interview the person and file one clean Linear issue. You author the issue; they answer clarifying questions, themselves or by relaying to whoever hit the problem. The same flow works on every channel that supplies an ISSUE INTAKE SOURCE: Slack, a Linear agent session, a pull request comment.
