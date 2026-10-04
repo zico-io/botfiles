@@ -1,5 +1,5 @@
 {
-  description = "botfiles - agent memory SSOT, dev toolchain, and the sandbox-host NixOS guest";
+  description = "botfiles - shared tooling and instructions for the remote T3 Code server";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
@@ -39,16 +39,25 @@
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in
     {
-      # msb is a KVM runtime, so it is Linux-only. On macOS the sandbox layer is
-      # Apple `container` (sandbox/build.sh), not this.
       packages = forAllSystems (
         pkgs:
         let
           msb = pkgs.callPackage ./pkgs/microsandbox.nix { };
+          botfiles = pkgs.callPackage ./pkgs/botfiles.nix { src = self; };
         in
-        nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+        {
+          inherit botfiles;
+          default = botfiles;
+          t3code = llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.t3code.override {
+            providerPackages = with llm-agents.packages.${pkgs.stdenv.hostPlatform.system}; [
+              claude-code
+              codex
+            ];
+          };
+        }
+        # msb needs KVM and is available only on Linux.
+        // nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           microsandbox = msb;
-          default = msb;
         }
       );
 
@@ -81,7 +90,11 @@
           self.nixosModules.tailnet
           {
             nixpkgs.overlays = [
-              (final: prev: { llm-agents = llm-agents.packages.${prev.stdenv.hostPlatform.system}; })
+              (final: prev: {
+                llm-agents = llm-agents.packages.${prev.stdenv.hostPlatform.system};
+                t3code = self.packages.${prev.stdenv.hostPlatform.system}.t3code;
+                botfiles = self.packages.${prev.stdenv.hostPlatform.system}.botfiles;
+              })
             ];
           }
           ./hosts/sandbox-host

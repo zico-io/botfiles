@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""botfile — portable agent-memory CLI.
+"""botfile - portable agent-memory CLI.
 
 Subcommands:
   validate       check entities.jsonl, memory index completeness, inline provenance
   budget-check   assert root instruction files stay under the line budget
-  wire --tool T  point a harness (codex|pi|claude|all) at this repo's AGENTS.md
+  wire --tool T  point a harness (codex|claude|all) at this repo's AGENTS.md
 
 No third-party deps. The derived vector store / MCP search from the handoff plan
 is deliberately not built: the memory tree is a handful of markdown files and
@@ -59,7 +59,7 @@ def fail(errs):
 def validate():
     errs = []
 
-    # 1. entities.jsonl — valid JSONL, required fields, unique canonical_id.
+    # 1. entities.jsonl - valid JSONL, required fields, unique canonical_id.
     seen = set()
     for n, line in enumerate(ENTITIES.read_text().splitlines(), 1):
         line = line.strip()
@@ -139,8 +139,6 @@ def wire(tool):
     def do(t):
         if t == "codex":
             link(home / ".codex" / "AGENTS.md")
-        elif t == "pi":
-            link(home / ".pi" / "agent" / "AGENTS.md")
         elif t == "claude":
             link(home / ".claude" / "AGENTS.md")
         else:
@@ -148,7 +146,7 @@ def wire(tool):
             return 1
         return 0
 
-    tools = ["codex", "pi", "claude"] if tool == "all" else [tool]
+    tools = ["codex", "claude"] if tool == "all" else [tool]
     rc = 0
     for t in tools:
         rc |= do(t)
@@ -185,8 +183,8 @@ def main(argv):
         for i, a in enumerate(argv[1:]):
             if a == "--tool" and i + 2 <= len(argv[1:]):
                 tool = argv[1:][i + 1]
-        if tool not in ("codex", "pi", "claude", "all"):
-            print("usage: botfile wire --tool {codex|pi|claude|all}", file=sys.stderr)
+        if tool not in ("codex", "claude", "all"):
+            print("usage: botfile wire --tool {codex|claude|all}", file=sys.stderr)
             return 1
         return wire(tool)
     print(f"unknown command: {cmd}\n{__doc__}", file=sys.stderr)

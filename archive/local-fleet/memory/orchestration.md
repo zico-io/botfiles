@@ -1,4 +1,4 @@
-# tools/orchestration — multi-agent harness
+# tools/orchestration - multi-agent harness
 
 - Fleets run on herdr (panes/tabs/status) + a per-mission **orbal-net server** that
   agents reach with the `orbal-net` CLI over TCP; herdr does placement/process, the

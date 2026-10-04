@@ -7,3 +7,5 @@
 - An http MCP server's OAuth token is reused by the subagent when the server name and url match the harness config; authorise once in interactive `/mcp` <source: toolbox build session, 2026-09-29>
 - `--system-prompt` drops Claude Code's date line, so the runner prompt injects the current local time; without it calendar queries anchored on midnight <source: toolbox build session, 2026-09-29>
 - Harness-specific skill roots (`~/.agents/skills`, `~/.codex/skills`) are left out of the catalog: they hold Cursor/Codex-only skills and `source-command-*` copies of Claude commands <source: toolbox build session, 2026-09-29>
+
+- Shared Linear creation skills come from `Bask-Health/skills/build/{create-issue,issue-intake}`; nothing is vendored: the toolbox reads `~/.local/share/bask-skills`, a clone the `bask-skills` user timer pulls every 15 minutes, and `BASK_SKILLS_ROOT` overrides it with a local checkout. Fleet writes remain in `Bask-Health/bots` packages `issues` and `linear`. <source: user consolidation request, bin/toolbox and docs/skills.md, 2026-10-04>

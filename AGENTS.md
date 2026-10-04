@@ -1,6 +1,6 @@
-# AGENTS.md — portable agent behavior (SSOT)
+# AGENTS.md - portable agent behavior (SSOT)
 
-**Agent:** `gilbert` — 24/7 product agent
+**Agent:** `gilbert` - 24/7 product agent
 with persistent, portable memory.
 
 ## Operating principles
@@ -11,7 +11,7 @@ with persistent, portable memory.
 - **Good code is self documenting.** Code comments should only exist to explain things not immediately obvious or to document public API.
 - **Upsert, not append-only.** Update and delete are allowed; stale facts get
   corrected, not accumulated.
-- **No em dashes.** Use a plain dash "-" instead of "—".
+- **No em dashes.** Use a plain dash "-" instead.
 - **Never auto-add the agent name** as co-author in commit messages or PRs.
 - **Never hand-edit auto-generated files.**
 - **Quality over cost.** Favor simplicity and robustness above development speed.
@@ -26,39 +26,13 @@ Every fact ends with inline provenance:
 
     - <fact> <source: …, YYYY-MM-DD>
 
-## Orchestration protocol
+## Server workflow
 
-Multi-agent work runs on **herdr** (placement/process/status) + the **`orbal-net`
-CLI** talking to a per-mission **orbal-net server** on the host (coordination). Max
-**three layers**, enforced by room membership:
-
-- **L1 orchestrator** — the pane you are in. Talks to leads in `mission-<feature>`.
-- **L2 leads** — one herdr tab each; in `mission-<feature>` and own `squad-<lead>`.
-- **L3 workers** — split into their lead's tab; in `squad-<lead>` only. Leaves —
-  never spawn.
-
-Rooms are public, joined by name. The orchestrator never messages a worker
-directly. Stand up / tear down a fleet from a roster with
-`orchestration/spawn.py` (`up`/`down`) or the `/spawn-team` command; `up` starts
-the mission's orbal-net server and `down` kills it (rooms die with it). A roster is a
-catalog of teams: the orchestrator spawns only the team(s) a mission needs (pass
-lead roles to `up`, or omit for all), not the whole roster every time. Harnesses
-are claude/codex/pi. See `.botfile/memory/tools/orchestration.md`.
-
-Agents emit typed progress with `orbal-net event <room> <kind>` / `orbal-net progress
-<room> N/M` (kinds: task-start/done/error/abort, step, phase, blocked, handoff) so
-an observer can follow the fleet in `orbal-net tui` - a live dashboard fed by one
-persistent server-push connection (no polling), with a room-thread drill-in plus a
-per-agent progress panel. Events are non-consuming (a separate table, they never
-advance a read cursor), so monitoring never eats a message an agent still needs. To
-monitor room *messages* the same way, use `orbal-net peek <room>` (non-consuming) - never
-`read`, which advances your cursor and eats messages agents still need. Agents block
-for their next task with `orbal-net recv <room>` (push-backed, replaces the old
-`wait`) - never a shell poll loop.
-
-Spawned agents have no `gh`/network and their clone's origin is a local mirror, so the
-orchestrator bridges every live GitHub step (push + PR via `spawn.py bridge-pr <feature>`,
-release edits, repo settings); agents prepare those artifacts as files/text.
+Botfiles configures the remote T3 Code server and its Claude Code and Codex
+providers. The MacBook is a T3 client and does not consume these files.
+Run providers as the human server user. The former herdr/orbal-net macOS fleet
+is retired under `archive/local-fleet/`; do not use its launchers or instructions
+for the T3 server.
 
 ## Toolbox
 
@@ -68,15 +42,12 @@ before saying a capability is missing. See `.botfile/memory/tools/toolbox.md`.
 
 ## Nix layer
 
-`flake.nix` pins two things: the dev toolchain (`nix develop`) and
-`nixosConfigurations.sandbox-host`, a NixOS guest on the bare-metal TrueNAS box
-that gives agents KVM microVMs over the tailnet. It is a **second** sandbox
-backend beside the macOS Apple `container` path, not a replacement. Deploy with
-`nixos-rebuild switch --flake .#sandbox-host --target-host <host>`. Disks are
-declarative (disko), secrets are sops + age with ciphertext only, and access is
-deny-by-default over Tailscale SSH. microsandbox 0.7.x is a CLI with no daemon
-or HTTP API, so there is no job endpoint to wrap yet. See
-`.botfile/memory/tools/nix.md`.
+`flake.nix` pins the server toolchain and `nixosConfigurations.sandbox-host`.
+T3 Code runs as a persistent user service; Claude Code and Codex are on its
+provider PATH. Deploy with `nixos-rebuild switch --flake .#sandbox-host
+--target-host <host>`. Disks use disko; secrets use sops + age with ciphertext
+only; access is over the tailnet. Microsandbox remains an optional host runtime,
+independent of T3 sessions. See `.botfile/memory/tools/nix.md`.
 
 ## Entity discipline
 

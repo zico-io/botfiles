@@ -2,9 +2,38 @@
 #
 # Machine-wide concerns stay in the system config; this file owns only what
 # belongs to the session an agent or a person actually works in.
-{ pkgs, ... }:
+{ lib, pkgs, ... }:
 {
   home.stateVersion = "26.05";
+
+  home.file.".claude/AGENTS.md".source = "${pkgs.botfiles}/share/botfiles/AGENTS.md";
+  home.file.".codex/AGENTS.md".source = "${pkgs.botfiles}/share/botfiles/AGENTS.md";
+
+  # Bask-Health/skills is authored once and read live: this clone is the toolbox's
+  # default skill root, fast-forwarded every 15 minutes. Uses the login's
+  # `gh auth`; until that exists the unit fails and the toolbox skips the root.
+  systemd.user.services.bask-skills = {
+    Unit.Description = "Pull Bask-Health/skills";
+    Service = {
+      Type = "oneshot";
+      ExecStart = pkgs.writeShellScript "bask-skills-pull" ''
+        dir="$HOME/.local/share/bask-skills"
+        if [ -d "$dir/.git" ]; then
+          ${lib.getExe pkgs.git} -C "$dir" -c credential.helper='!${lib.getExe pkgs.gh} auth git-credential' pull --ff-only -q
+        else
+          ${lib.getExe pkgs.gh} repo clone Bask-Health/skills "$dir" -- -q
+        fi
+      '';
+      Environment = [ "PATH=${lib.makeBinPath [ pkgs.git ]}" ];
+    };
+  };
+  systemd.user.timers.bask-skills = {
+    Timer = {
+      OnStartupSec = "1min";
+      OnUnitActiveSec = "15min";
+    };
+    Install.WantedBy = [ "timers.target" ];
+  };
 
   # The identity itself is per user, set next to each login in default.nix.
   programs.git.enable = true;
@@ -46,6 +75,8 @@
   home.packages = with pkgs; [
     llm-agents.claude-code
     llm-agents.codex
+    t3code
+    botfiles
     fd
     gh
   ];
