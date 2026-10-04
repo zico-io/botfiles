@@ -1,13 +1,14 @@
 {
   "source": "Bask-Health/skills",
-  "revision": "8d684186e82b3f7ffceb7cb4d95a6f51f942552b",
+  "revision": "09cb36f6cf1b7ecb6316e566d47feeabd7b81ea4",
   "working_tree": false,
   "layout": "botfiles",
   "files": {
     "skills/create-issue/SKILL.md": "10276355d1b5919e9ca4fe56c4c92775d5ce6e1958c383762a6466e92b3138ef",
     "skills/issue-intake/SKILL.md": "786401133df4511b91e7634ed6005c5c008abef210826903c910fbe0c4575f83",
     "skills/issue-intake/references/desktop.md": "00c815f4cc8a1373dfa31e62595ac9eef3342a6c84964da9e0f5ccd0cbfe5e1c",
-    "skills/issue-intake/references/fleet.md": "2c83ac5b2731ee986045f40caa05f4fdcf4d7dd5fd10650cf0d79cc4efbbbe63",
-    "bin/sync-skills": "ca86e12ef51f9b3a78f06287ab07c8fe3a6da3311e6a6bc02dda4b15426671aa"
+    "skills/issue-intake/references/fleet-description.txt": "04857c6167f4fc1eea369b109a4beaef495eba02f42bc6a2b6ab5fdac6737e42",
+    "skills/issue-intake/references/fleet.md": "e6e9d555dbf4f4c04584491ff9b1ab274bb2f4d49ff5a43fb77111471c33d6b8",
+    "bin/sync-skills": "8a7e5a16f93ca7d1ca80c565c76d97d4a3a5c122b615c494908337e30f8c063f"
   }
 }

@@ -1,0 +1,1 @@
+Use when filing a new Linear issue a person asked for (a bug they hit, a feature request, a chore, 'capture this as a ticket'), or when asked in Slack to link the thread to an issue. Not for the work behind a pull request.

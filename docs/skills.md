@@ -40,8 +40,9 @@ that copies match their lockfile without requiring cross-repository credentials.
 Passing `--source` also checks them against the current source checkout.
 
 Review and commit the source and generated consumer changes together. Rebuild
-the T3 host to deploy botfiles; use the bots repo's normal Bob deployment process
-to deploy the fleet copy. Syncing files does not deploy or restart live agents.
+the T3 host to deploy botfiles. The bots copy is the shared issues extension's
+intake skill; build and deploy its consuming agents, including Bob and Herald,
+through the normal bots workflow. Syncing files does not deploy or restart live agents.
 The fleet adapter preserves the existing `issues__file` filing authority.
 
 ## Linear authentication
