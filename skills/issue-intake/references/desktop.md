@@ -8,9 +8,14 @@ actions to that integration; its tool calls use the same authenticated adapter.
 If no authenticated Linear connection is available, stop before filing and
 identify the missing connection.
 
-1. Read the owning-team map from the skills source's
-   `.mex/context/linear-teams.md` if available. Otherwise list live teams and
-   resolve ownership from the affected surface. Ask when ownership is ambiguous.
+1. Read `.mex/context/linear-teams.md` from the skills source repo, not the
+   current project. Resolve the skill's own directory (following symlinks);
+   in the source checkout the map is two levels above it. A packaged copy may
+   omit the map. If it cannot be read, disclose that routing is proceeding
+   without it, then list live teams and resolve ownership from the affected
+   surface using the routing constraints below. Ask before filing when ownership
+   is ambiguous or no permitted owner can be established. Live team membership
+   alone does not make a team a valid destination.
 2. List that team's labels and workflow states, and search open issues. Read a
    likely duplicate before deciding that it represents the same finding.
 3. Prepare a compact issue with Initial ask, Context, Repro (when evidenced),
@@ -29,6 +34,23 @@ identify the missing connection.
    needs handled by `issues__file` are not automatically available here. Use
    available authenticated attachment tools only when authorized and report
    anything that did not transfer.
+
+## Routing constraints
+
+These apply with or without the team map:
+
+- Never route intake to `Platform` (`PLT`), `Squeezers` (`COR`), `Product`
+  (`PRD`), or `DevOps` (`IAC`). Platform/shared-code fixes belong to the domain
+  whose feature broke; Squeezers is historical, Product is an umbrella, and
+  DevOps deploy work is filed directly by its owner outside this intake path.
+- Route by the affected surface, not the reporter's team or the location of
+  shared implementation code. For example, a checkout bug fixed in a shared
+  package belongs to Commerce, never Platform or Product.
+- `Fleet` (`FLT`) owns `Bask-Health/bots`, its internal agents and their shared
+  packages. Route that repo's engineering work there.
+- Before saving, verify the chosen live team owns the surface and is not one
+  of the four excluded teams. Include the missing-map disclosure in the result
+  when fallback routing was used; do not silently treat a failed map read as success.
 
 ## Priority adapter
 
