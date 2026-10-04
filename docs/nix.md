@@ -50,8 +50,7 @@ and there is no TTL reaper yet.
 
 ## Shared server tooling
 
-The `botfiles` package installs `botfile`, `toolbox`, `sync-skills` and
-`botfiles-provision`. Home Manager wires Claude and Codex instructions from
-that package. Run `botfiles-provision` as each login to register the toolbox.
-A host rebuild updates the packaged skills; see [skill development](skills.md)
-for synchronizing the shared source and the fleet before deployment.
+The `botfiles` package installs `botfile`, `toolbox` and `botfiles-provision`.
+Home Manager wires Claude and Codex instructions from that package. Run
+`botfiles-provision` as each login to register the toolbox. Bask skills are not
+packaged: the `bask-skills` user timer keeps a pulled clone, see [shared skills](skills.md).

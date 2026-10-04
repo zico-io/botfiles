@@ -12,7 +12,6 @@ Use Python 3 directly, or enter the pinned toolchain with Nix:
 nix develop
 ./bin/botfile selfcheck
 ./bin/toolbox selfcheck
-./bin/sync-skills --check
 ./bin/botfile validate
 ./bin/botfile budget-check
 ```
@@ -42,7 +41,7 @@ For local skill development and fleet deployment, see [shared skills](docs/skill
 | --- | --- |
 | [AGENTS.md](AGENTS.md) | Shared agent instructions |
 | [.botfile/](.botfile/) | Manifest, curated memory, and canonical entities |
-| [bin/](bin/) | Memory CLI, toolbox, and shared skill synchronization |
+| [bin/](bin/) | Memory CLI and toolbox |
 | [skills/](skills/) | Reusable workflows |
 | [toolbox/catalog.json](toolbox/catalog.json) | Skill roots, plugins, and MCP integrations |
 | [flake.nix](flake.nix) | Pinned dev toolchain, checks, packages, and NixOS host |
@@ -74,5 +73,5 @@ The retired macOS fleet and its mission history live in [archive/](archive/READM
 
 - [Toolbox](docs/toolbox.md): search and use skills and MCP integrations.
 - [Nix and sandbox-host](docs/nix.md): deploy the remote KVM host and manage T3 Code.
-- [Shared skills](docs/skills.md): edit locally and sync deployable fleet copies.
+- [Shared skills](docs/skills.md): where Bask skills come from and how to edit them.
 - [Secrets](secrets/README.md): provision encrypted host secrets.

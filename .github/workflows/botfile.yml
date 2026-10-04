@@ -11,8 +11,6 @@ jobs:
         run: ./bin/botfile selfcheck
       - name: toolbox selfcheck
         run: ./bin/toolbox selfcheck
-      - name: shared Linear skills
-        run: ./bin/sync-skills --check
       - name: validate
         run: ./bin/botfile validate
       - name: budget-check
@@ -38,5 +36,4 @@ jobs:
             .#checks.x86_64-linux.botfile-selfcheck \
             .#checks.x86_64-linux.botfile-validate \
             .#checks.x86_64-linux.botfile-budget-check \
-            .#checks.x86_64-linux.toolbox-selfcheck \
-            .#checks.x86_64-linux.shared-skills
+            .#checks.x86_64-linux.toolbox-selfcheck

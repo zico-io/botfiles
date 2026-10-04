@@ -21,5 +21,4 @@ in
   botfile-validate = gate "botfile" "validate";
   botfile-budget-check = gate "botfile" "budget-check";
   toolbox-selfcheck = gate "toolbox" "selfcheck";
-  shared-skills = gate "sync-skills" "--check";
 }

@@ -11,39 +11,26 @@ for deterministic filing. Direct Linear tools in T3 use the terminal adapter;
 that adapter reports unavailable fleet assessment, ledger and customer-need
 features instead of claiming full runtime parity.
 
+## Where the server gets them
+
+Skills are authored once in `Bask-Health/skills` and never copied here. On
+sandbox-host the `bask-skills` user timer clones that repo into
+`~/.local/share/bask-skills` and fast-forwards it every 15 minutes, using the
+login's `gh auth`. The toolbox reads its `build/`, `content/` and `research/`
+directories ahead of everything else, so a merge to `main` is live on the
+next pull, with no botfiles change or rebuild. Check it with
+`systemctl --user status bask-skills`.
+
+The fleet does the same at build time: `Bask-Health/bots` fetches the intake
+skill from `main` on install, so its next deploy carries the change.
+
 ## Edit locally
 
-Clone the source on the T3 server and edit its skill files. For immediate local
-iteration, point the toolbox at its category directories with
-`BASK_SKILLS_ROOT=/path/to/skills`. The toolbox searches that checkout before
-packaged copies, so changes are available on the next search/use call. Set this
-variable when running `bash provision.sh` or `botfiles-provision`; it is saved
-in each provider's toolbox server configuration. Re-run provisioning without the
-variable to return to packaged skills.
-
-## Sync deployable copies
-
-Run from botfiles, substituting your checkout paths:
-
-```bash
-./bin/sync-skills --source /path/to/skills --layout botfiles
-./bin/sync-skills --source /path/to/skills --target /path/to/bots --layout bots
-./bin/sync-skills --check --source /path/to/skills
-python3 /path/to/bots/scripts/sync-linear-skills.py --check --source /path/to/skills
-```
-
-The sync writes skill copies and `linear-skills.lock.json`, which records the
-source revision, whether the source checkout has local changes, and SHA-256
-checksums. Do not edit those generated files. Local edits can be synced for
-review; release copies should come from a committed source revision. CI checks
-that copies match their lockfile without requiring cross-repository credentials.
-Passing `--source` also checks them against the current source checkout.
-
-Review and commit the source and generated consumer changes together. Rebuild
-the T3 host to deploy botfiles. The bots copy is the shared issues extension's
-intake skill; build and deploy its consuming agents, including Bob and Herald,
-through the normal bots workflow. Syncing files does not deploy or restart live agents.
-The fleet adapter preserves the existing `issues__file` filing authority.
+Point the toolbox at your working checkout with
+`BASK_SKILLS_ROOT=/path/to/skills` when running `bash provision.sh` or
+`botfiles-provision`; it is saved in each provider's toolbox server config and
+takes effect on the next search/use call. Re-run provisioning without the
+variable to return to the pulled clone.
 
 ## Linear authentication
 
