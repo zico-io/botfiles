@@ -47,6 +47,11 @@
     "Vercel": {
       "type": "claudeai",
       "description": "Vercel platform: projects, deployments and build logs, runtime logs and errors, domains and DNS, env vars, feature flags, firewall, edge config, sandboxes, teams, analytics, rolling releases."
+    },
+    "linear": {
+      "type": "http",
+      "url": "https://mcp.linear.app/mcp",
+      "description": "Linear issue tracking: search and read tickets, list teams, labels and workflow states, create or update issues, comments, projects and attachments. Use the shared issue-intake skill when filing reports."
     }
   }
 }

@@ -1,0 +1,13 @@
+{
+  "source": "Bask-Health/skills",
+  "revision": "8d684186e82b3f7ffceb7cb4d95a6f51f942552b",
+  "working_tree": false,
+  "layout": "botfiles",
+  "files": {
+    "skills/create-issue/SKILL.md": "10276355d1b5919e9ca4fe56c4c92775d5ce6e1958c383762a6466e92b3138ef",
+    "skills/issue-intake/SKILL.md": "786401133df4511b91e7634ed6005c5c008abef210826903c910fbe0c4575f83",
+    "skills/issue-intake/references/desktop.md": "00c815f4cc8a1373dfa31e62595ac9eef3342a6c84964da9e0f5ccd0cbfe5e1c",
+    "skills/issue-intake/references/fleet.md": "2c83ac5b2731ee986045f40caa05f4fdcf4d7dd5fd10650cf0d79cc4efbbbe63",
+    "bin/sync-skills": "ca86e12ef51f9b3a78f06287ab07c8fe3a6da3311e6a6bc02dda4b15426671aa"
+  }
+}

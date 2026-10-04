@@ -6,6 +6,9 @@
 {
   home.stateVersion = "26.05";
 
+  home.file.".claude/AGENTS.md".source = "${pkgs.botfiles}/share/botfiles/AGENTS.md";
+  home.file.".codex/AGENTS.md".source = "${pkgs.botfiles}/share/botfiles/AGENTS.md";
+
   # The identity itself is per user, set next to each login in default.nix.
   programs.git.enable = true;
 
@@ -46,6 +49,8 @@
   home.packages = with pkgs; [
     llm-agents.claude-code
     llm-agents.codex
+    t3code
+    botfiles
     fd
     gh
   ];

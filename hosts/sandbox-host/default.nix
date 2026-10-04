@@ -98,6 +98,7 @@ in
   # (and any T3 Code remote environment) runs as this user.
   users.users.percules = {
     isNormalUser = true;
+    linger = true;
     extraGroups = [
       "wheel"
       "kvm"
@@ -127,6 +128,18 @@ in
     # authored by `<user>@sandbox-host`.
     users.percules = {
       imports = [ ./home.nix ];
+      systemd.user.startServices = "sd-switch";
+      systemd.user.services.t3code = {
+        Unit.Description = "T3 Code server";
+        Service = {
+          ExecStart = "${lib.getExe pkgs.t3code} serve --host 0.0.0.0 --port 3773";
+          WorkingDirectory = "%h";
+          Environment = [ "PATH=/etc/profiles/per-user/percules/bin:/run/current-system/sw/bin" ];
+          Restart = "on-failure";
+          RestartSec = 5;
+        };
+        Install.WantedBy = [ "default.target" ];
+      };
       programs.git.settings.user = {
         name = "Nico Zamora";
         email = "dev@zico.xyz";

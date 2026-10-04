@@ -135,7 +135,12 @@ def load(catalog_path=None):
     """Every catalog entry, first definition of a name wins."""
     path = Path(catalog_path or CATALOG)
     cat = json.loads(path.read_text())
-    roots = [(path.parent / os.path.expanduser(r), "") for r in cat.get("skills", [])]
+    shared = os.environ.get("BASK_SKILLS_ROOT")
+    roots = (
+        [(Path(shared).expanduser() / category, "") for category in ("build", "content", "research")]
+        if shared else []
+    )
+    roots += [(path.parent / os.path.expanduser(r), "") for r in cat.get("skills", [])]
     roots += plugin_roots(cat.get("plugins", []))
     entries, seen = [], set()
 

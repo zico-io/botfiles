@@ -1,4 +1,4 @@
-# git — CLI patterns & workarounds
+# git - CLI patterns & workarounds
 
 One file per tool. Commands, configs, and gotchas worth remembering.
 
