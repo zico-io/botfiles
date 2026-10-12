@@ -19,7 +19,7 @@
     # so following ours would turn every agent CLI into a local build.
     llm-agents.url = "github:numtide/llm-agents.nix";
     durable-pi = {
-      url = "github:zico-io/durable-pi/vercel-ai-gateway";
+      url = "github:zico-io/durable-pi/nextjs-playground";
       flake = false;
     };
   };

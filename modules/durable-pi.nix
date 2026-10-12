@@ -117,7 +117,7 @@ in
         After = lib.optional cfg.backend.enable "dpi-backend.service";
       };
       Service = {
-        ExecStart = "${node} ${tsx "dpi-playground"} apps/dpi-playground-hub/src/main.ts --host ${cfg.hub.host} --port ${toString cfg.hub.port}";
+        ExecStart = "${node} ${tsx "dpi-playground"} server.ts --host ${cfg.hub.host} --port ${toString cfg.hub.port}";
         WorkingDirectory = "${root}/dpi-playground";
         Environment = [
           "DPI_HOME=${cfg.home}"
