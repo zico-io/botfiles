@@ -79,5 +79,11 @@
     botfiles
     fd
     gh
+    # Durable Pi: node:sqlite needs Node 24, and every `just` recipe runs in zsh.
+    nodejs_24
+    just
+    zsh
+    sqlite
+    openssl
   ];
 }

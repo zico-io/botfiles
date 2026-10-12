@@ -127,8 +127,20 @@ in
     # Commits made from an agent session on this host would otherwise be
     # authored by `<user>@sandbox-host`.
     users.percules = {
-      imports = [ ./home.nix ];
+      imports = [
+        ./home.nix
+        ../../modules/durable-pi.nix
+      ];
       systemd.user.startServices = "sd-switch";
+      # Bound to every interface, but the firewall admits only tailscale0 and
+      # the hub admits only these tailnet logins.
+      services.durable-pi = {
+        enable = true;
+        hub = {
+          host = "0.0.0.0";
+          tailnetAllow = [ "nico@bask.health" ];
+        };
+      };
       systemd.user.services.t3code = {
         Unit.Description = "T3 Code server";
         Service = {
