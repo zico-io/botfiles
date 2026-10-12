@@ -57,11 +57,11 @@
     "durable-pi": {
       "flake": false,
       "locked": {
-        "lastModified": 1791847627,
-        "narHash": "sha256-heSBV7sM3NqibFabynhBd2fleCryPK96yGfbySfFuFY=",
+        "lastModified": 1791848713,
+        "narHash": "sha256-bDPEhu9Ty7/6Aomz/FOKFJodagNkg5BA4LhWrjZR1Bs=",
         "owner": "zico-io",
         "repo": "durable-pi",
-        "rev": "0eab4cbf46f98a945a4f80fcb17e5ce99b3c5801",
+        "rev": "7ab60d75973355d946611f22956ec9fcc04aae1b",
         "type": "github"
       },
       "original": {

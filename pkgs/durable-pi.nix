@@ -39,11 +39,10 @@ stdenv.mkDerivation {
   '') apps;
 
   # The playground is one Next.js app (hub routes and web UI); the hub serves .next at runtime.
-  # webpack, not Turbopack: the SDK's NodeNext imports (./x.js for ./x.ts) need extensionAlias.
   buildPhase = ''
     runHook preBuild
     export HOME=$TMPDIR NEXT_TELEMETRY_DISABLED=1
-    (cd apps/dpi-playground && node node_modules/next/dist/bin/next build --webpack)
+    (cd apps/dpi-playground && node node_modules/next/dist/bin/next build)
     runHook postBuild
   '';
 
