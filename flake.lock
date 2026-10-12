@@ -57,16 +57,16 @@
     "durable-pi": {
       "flake": false,
       "locked": {
-        "lastModified": 1791842491,
-        "narHash": "sha256-QiNLYG8uYDD/g2YDhRb51+obGFE2SGDJ1zfIDvbFFiQ=",
+        "lastModified": 1791847627,
+        "narHash": "sha256-heSBV7sM3NqibFabynhBd2fleCryPK96yGfbySfFuFY=",
         "owner": "zico-io",
         "repo": "durable-pi",
-        "rev": "b9a9b7cdcfee60e6933b215ea884ccd6c0a5cf93",
+        "rev": "0eab4cbf46f98a945a4f80fcb17e5ce99b3c5801",
         "type": "github"
       },
       "original": {
         "owner": "zico-io",
-        "ref": "vercel-ai-gateway",
+        "ref": "nextjs-playground",
         "repo": "durable-pi",
         "type": "github"
       }

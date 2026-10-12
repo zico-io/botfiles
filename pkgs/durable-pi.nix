@@ -38,10 +38,12 @@ stdenv.mkDerivation {
     chmod -R u+w apps/${app}/node_modules
   '') apps;
 
-  # Only the Vite bundle: the repo's own `just check` owns type checking.
+  # The playground is one Next.js app (hub routes and web UI); the hub serves .next at runtime.
+  # webpack, not Turbopack: the SDK's NodeNext imports (./x.js for ./x.ts) need extensionAlias.
   buildPhase = ''
     runHook preBuild
-    (cd apps/dpi-playground && node node_modules/vite/bin/vite.js build --config apps/dpi-playground-fe/vite.config.ts)
+    export HOME=$TMPDIR NEXT_TELEMETRY_DISABLED=1
+    (cd apps/dpi-playground && node node_modules/next/dist/bin/next build --webpack)
     runHook postBuild
   '';
 
