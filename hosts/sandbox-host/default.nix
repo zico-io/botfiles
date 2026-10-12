@@ -82,6 +82,11 @@ in
     defaultSopsFile = secretsFile;
     age.sshKeyPaths = [ "/etc/ssh/ssh_host_ed25519_key" ];
     secrets.tailscale-authkey = { };
+    # Read by the `jev` wrapper of every human login (see home.nix).
+    secrets.typesafe-api-key = {
+      group = "users";
+      mode = "0440";
+    };
   };
 
   users.users.admin = {
@@ -127,8 +132,20 @@ in
     # Commits made from an agent session on this host would otherwise be
     # authored by `<user>@sandbox-host`.
     users.percules = {
-      imports = [ ./home.nix ];
+      imports = [
+        ./home.nix
+        ../../modules/durable-pi.nix
+      ];
       systemd.user.startServices = "sd-switch";
+      # Bound to every interface, but the firewall admits only tailscale0 and
+      # the hub admits only these tailnet logins.
+      services.durable-pi = {
+        enable = true;
+        hub = {
+          host = "0.0.0.0";
+          tailnetAllow = [ "nico@bask.health" ];
+        };
+      };
       systemd.user.services.t3code = {
         Unit.Description = "T3 Code server";
         Service = {
@@ -163,6 +180,9 @@ in
   # glibc executables: NixOS has no /lib64/ld-linux, so they fail with a
   # misleading "no such file or directory" without a loader shim.
   programs.nix-ld.enable = true;
+
+  # Agent plugin hooks commonly execute scripts with a /bin/bash shebang.
+  systemd.tmpfiles.rules = [ "L+ /bin/bash - - - - ${pkgs.bash}/bin/bash" ];
 
   environment.systemPackages = with pkgs; [
     btop

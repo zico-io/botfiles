@@ -18,6 +18,10 @@
     # No nixpkgs follows: its own pin is what cache.numtide.com built against,
     # so following ours would turn every agent CLI into a local build.
     llm-agents.url = "github:numtide/llm-agents.nix";
+    durable-pi = {
+      url = "git+file:///home/percules/durable-pi?ref=vercel-ai-gateway";
+      flake = false;
+    };
   };
 
   outputs =
@@ -28,6 +32,7 @@
       sops-nix,
       home-manager,
       llm-agents,
+      durable-pi,
     }:
     let
       # Hand-rolled instead of flake-utils: one fewer input for one genAttrs.
@@ -48,6 +53,8 @@
         {
           inherit botfiles;
           default = botfiles;
+          jev-cli = pkgs.callPackage ./pkgs/jev-cli.nix { };
+          durable-pi = pkgs.callPackage ./pkgs/durable-pi.nix { src = durable-pi; };
           t3code = llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.t3code.override {
             providerPackages = with llm-agents.packages.${pkgs.stdenv.hostPlatform.system}; [
               claude-code
@@ -80,6 +87,8 @@
         tailnet = import ./modules/tailnet.nix;
       };
 
+      homeManagerModules.durable-pi = import ./modules/durable-pi.nix;
+
       nixosConfigurations.sandbox-host = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
         modules = [
@@ -94,6 +103,8 @@
                 llm-agents = llm-agents.packages.${prev.stdenv.hostPlatform.system};
                 t3code = self.packages.${prev.stdenv.hostPlatform.system}.t3code;
                 botfiles = self.packages.${prev.stdenv.hostPlatform.system}.botfiles;
+                jev-cli = self.packages.${prev.stdenv.hostPlatform.system}.jev-cli;
+                durable-pi = self.packages.${prev.stdenv.hostPlatform.system}.durable-pi;
               })
             ];
           }

@@ -26,7 +26,12 @@ with this shape:
 
 ```yaml
 tailscale-authkey: tskey-auth-...
+typesafe-api-key: ...
 ```
+
+Every key the host declares must be present, or activation fails.
+`typesafe-api-key` is the TypeSafe Jev key that the `jev` CLI uses for every
+login.
 
 Use a **tag-owning, reusable** auth key so the node can claim
 `tag:sandbox-host` without an operator's personal identity. Commit the

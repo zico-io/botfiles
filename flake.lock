@@ -54,6 +54,23 @@
         "type": "github"
       }
     },
+    "durable-pi": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1791842491,
+        "narHash": "sha256-QiNLYG8uYDD/g2YDhRb51+obGFE2SGDJ1zfIDvbFFiQ=",
+        "ref": "vercel-ai-gateway",
+        "rev": "b9a9b7cdcfee60e6933b215ea884ccd6c0a5cf93",
+        "revCount": 3,
+        "type": "git",
+        "url": "file:///home/percules/durable-pi"
+      },
+      "original": {
+        "ref": "vercel-ai-gateway",
+        "type": "git",
+        "url": "file:///home/percules/durable-pi"
+      }
+    },
     "flake-parts": {
       "inputs": {
         "nixpkgs-lib": [
@@ -153,6 +170,7 @@
     "root": {
       "inputs": {
         "disko": "disko",
+        "durable-pi": "durable-pi",
         "home-manager": "home-manager",
         "llm-agents": "llm-agents",
         "nixpkgs": "nixpkgs_2",

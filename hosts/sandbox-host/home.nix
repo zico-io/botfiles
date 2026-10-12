@@ -2,12 +2,26 @@
 #
 # Machine-wide concerns stay in the system config; this file owns only what
 # belongs to the session an agent or a person actually works in.
-{ lib, pkgs, ... }:
+{
+  lib,
+  pkgs,
+  osConfig,
+  ...
+}:
+let
+  # Without the sops secret, `jev auth set` per login is the fallback.
+  jev-cli = pkgs.jev-cli.override {
+    apiKeyFile = osConfig.sops.secrets.typesafe-api-key.path or null;
+  };
+in
 {
   home.stateVersion = "26.05";
 
   home.file.".claude/AGENTS.md".source = "${pkgs.botfiles}/share/botfiles/AGENTS.md";
   home.file.".codex/AGENTS.md".source = "${pkgs.botfiles}/share/botfiles/AGENTS.md";
+
+  # Found through the toolbox's ~/.claude/toolbox-skills root, not ambient context.
+  home.file.".claude/toolbox-skills/jev-cli".source = "${jev-cli}/share/skills/jev-cli";
 
   # Bask-Health/skills is authored once and read live: this clone is the toolbox's
   # default skill root, fast-forwarded every 15 minutes. Uses the login's
@@ -75,9 +89,17 @@
   home.packages = with pkgs; [
     llm-agents.claude-code
     llm-agents.codex
+    devenv
     t3code
     botfiles
+    jev-cli
     fd
     gh
+    # Durable Pi: node:sqlite needs Node 24, and every `just` recipe runs in zsh.
+    nodejs_24
+    just
+    zsh
+    sqlite
+    openssl
   ];
 }
