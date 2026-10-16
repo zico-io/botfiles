@@ -48,6 +48,26 @@ and there is no TTL reaper yet.
 
 [Back to the README](../README.md)
 
+## Bench hub
+
+`percules` runs Bench's hub (`apps/hub` in the private zico-io/bench) as the
+`bench-hub` user service from `modules/bench-hub.nix`. bench is not a flake
+input, so CI evaluates this host without a token: the `bench-hub-update` timer
+keeps a clone in `~/.local/share/bench-hub` on `main` with the login's `gh auth`,
+installs only the hub's dependencies, and restarts the hub when `main` moves.
+The root `bench-hub-serve` unit publishes it with `tailscale serve` at
+`https://sandbox-host.<tailnet>.ts.net:10000`, which leaves 80 and 443 to other
+services.
+
+The hub starts only once `~/.config/bench-hub/env` exists. Write it from bench's
+OpenTofu state, then restart it:
+
+```bash
+infra/backend/hub-secrets.sh --env-file ~/.config/bench-hub/env   # in a bench checkout
+systemctl --user restart bench-hub
+journalctl --user -u bench-hub -u bench-hub-update -f
+```
+
 ## Shared server tooling
 
 The `botfiles` package installs `botfile`, `toolbox` and `botfiles-provision`.
