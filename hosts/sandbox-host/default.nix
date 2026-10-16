@@ -78,6 +78,25 @@ in
     memoryMax = "36G";
   };
 
+  # Bench's hub (modules/bench-hub.nix, percules' user service) over HTTPS on the
+  # tailnet, with Tailscale's certificate for this host's MagicDNS name. Port
+  # 10000 leaves 80 and 443 to other services, and is one of the three ports
+  # Funnel serves, should the hub ever need to be public.
+  systemd.services.bench-hub-serve = {
+    description = "Publish the bench hub on the tailnet";
+    after = [ "tailscaled.service" ];
+    wants = [ "tailscaled.service" ];
+    wantedBy = [ "multi-user.target" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      # tailscaled may still be logging in at boot.
+      Restart = "on-failure";
+      RestartSec = 10;
+    };
+    script = "${lib.getExe config.services.tailscale.package} serve --bg --https=10000 http://127.0.0.1:${toString config.home-manager.users.percules.services.bench-hub.port}";
+  };
+
   sops = lib.mkIf haveSecrets {
     defaultSopsFile = secretsFile;
     age.sshKeyPaths = [ "/etc/ssh/ssh_host_ed25519_key" ];
@@ -135,7 +154,9 @@ in
       imports = [
         ./home.nix
         ../../modules/durable-pi.nix
+        ../../modules/bench-hub.nix
       ];
+      services.bench-hub.enable = true;
       systemd.user.startServices = "sd-switch";
       # Bound to every interface, but the firewall admits only tailscale0 and
       # the hub admits only these tailnet logins.
