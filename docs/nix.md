@@ -59,12 +59,11 @@ The root `bench-hub-serve` unit publishes it with `tailscale serve` at
 `https://sandbox-host.<tailnet>.ts.net:10000`, which leaves 80 and 443 to other
 services.
 
-The hub starts only once `~/.config/bench-hub/env` exists. Write it from bench's
-OpenTofu state, then restart it:
+The hub starts only once `~/.config/bench-hub/env` exists. From a bench checkout
+on this host, write it from bench's OpenTofu state; the script restarts the hub:
 
 ```bash
-infra/backend/hub-secrets.sh --env-file ~/.config/bench-hub/env   # in a bench checkout
-systemctl --user restart bench-hub
+infra/backend/hub-secrets.sh
 journalctl --user -u bench-hub -u bench-hub-update -f
 ```
 

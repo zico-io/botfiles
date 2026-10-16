@@ -8,8 +8,8 @@
 # when main moves. The hub runs from source with tsx, as bench ships it.
 #
 # Secrets stay outside the store: the hub reads its database URL and auth
-# secret from envFile (mode 0600), which `infra/backend/hub-secrets.sh
-# --env-file` in bench writes. Until that file and apps/hub/bin/hub.js exist,
+# secret from envFile (mode 0600), which `infra/backend/hub-secrets.sh` in
+# bench writes. Until that file and apps/hub/bin/hub.js exist,
 # the hub does not start.
 {
   config,
