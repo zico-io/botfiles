@@ -45,7 +45,9 @@
           content = {
             type = "filesystem";
             format = "ext4";
-            mountpoint = "/var/lib/microsandbox";
+            # Persistent sandbox homes: yggdrasil's local-path provisioner for
+            # the `local-sandbox` StorageClass roots its volumes here.
+            mountpoint = "/var/lib/sandboxes";
             mountOptions = [ "noatime" ];
           };
         };
