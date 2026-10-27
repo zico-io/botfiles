@@ -79,5 +79,10 @@
           ./hosts/sandbox-host
         ];
       };
+
+      nixosConfigurations.rescue = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        modules = [ ./hosts/rescue ];
+      };
     };
 }

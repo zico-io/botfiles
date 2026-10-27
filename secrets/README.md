@@ -15,8 +15,8 @@ nix develop                                    # sops + age + ssh-to-age
 ssh admin@sandbox-pool-1 'cat /etc/ssh/ssh_host_ed25519_key.pub' | ssh-to-age
 ```
 
-Put the resulting `age1...` recipient in `.sops.yaml`, replacing the
-placeholder, then create the file:
+Put the resulting `age1...` recipient in `.sops.yaml`, next to the operator's
+own age key (so the file stays editable off the host), then create the file:
 
 ```bash
 sops secrets/sandbox-host.yaml
