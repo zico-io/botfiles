@@ -13,13 +13,9 @@ features instead of claiming full runtime parity.
 
 ## Where the server gets them
 
-Skills are authored once in `Bask-Health/skills` and never copied here. On
-sandbox-host the `bask-skills` user timer clones that repo into
-`~/.local/share/bask-skills` and fast-forwards it every 15 minutes, using the
-login's `gh auth`. The toolbox reads its `build/`, `content/` and `research/`
-directories ahead of everything else, so a merge to `main` is live on the
-next pull, with no botfiles change or rebuild. Check it with
-`systemctl --user status bask-skills`.
+Skills are authored once in `Bask-Health/skills` and never copied here. The
+toolbox reads a clone's `build/`, `content/` and `research/` directories ahead
+of everything else.
 
 The fleet does the same at build time: `Bask-Health/bots` fetches the intake
 skill from `main` on install, so its next deploy carries the change.

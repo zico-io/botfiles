@@ -11,17 +11,9 @@
       url = "github:Mic92/sops-nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    home-manager = {
-      url = "github:nix-community/home-manager/release-26.05";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
     # No nixpkgs follows: its own pin is what cache.numtide.com built against,
     # so following ours would turn every agent CLI into a local build.
     llm-agents.url = "github:numtide/llm-agents.nix";
-    durable-pi = {
-      url = "github:zico-io/durable-pi/nextjs-playground";
-      flake = false;
-    };
   };
 
   outputs =
@@ -30,9 +22,7 @@
       nixpkgs,
       disko,
       sops-nix,
-      home-manager,
       llm-agents,
-      durable-pi,
     }:
     let
       # Hand-rolled instead of flake-utils: one fewer input for one genAttrs.
@@ -47,24 +37,18 @@
       packages = forAllSystems (
         pkgs:
         let
-          msb = pkgs.callPackage ./pkgs/microsandbox.nix { };
           botfiles = pkgs.callPackage ./pkgs/botfiles.nix { src = self; };
         in
         {
           inherit botfiles;
           default = botfiles;
           jev-cli = pkgs.callPackage ./pkgs/jev-cli.nix { };
-          durable-pi = pkgs.callPackage ./pkgs/durable-pi.nix { src = durable-pi; };
           t3code = llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.t3code.override {
             providerPackages = with llm-agents.packages.${pkgs.stdenv.hostPlatform.system}; [
               claude-code
               codex
             ];
           };
-        }
-        # msb needs KVM and is available only on Linux.
-        // nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-          microsandbox = msb;
         }
       );
 
@@ -83,31 +67,15 @@
       formatter = forAllSystems (pkgs: pkgs.nixfmt);
 
       nixosModules = {
-        microsandbox = import ./modules/microsandbox.nix;
         tailnet = import ./modules/tailnet.nix;
       };
-
-      homeManagerModules.durable-pi = import ./modules/durable-pi.nix;
 
       nixosConfigurations.sandbox-host = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
         modules = [
           disko.nixosModules.disko
           sops-nix.nixosModules.sops
-          home-manager.nixosModules.home-manager
-          self.nixosModules.microsandbox
           self.nixosModules.tailnet
-          {
-            nixpkgs.overlays = [
-              (final: prev: {
-                llm-agents = llm-agents.packages.${prev.stdenv.hostPlatform.system};
-                t3code = self.packages.${prev.stdenv.hostPlatform.system}.t3code;
-                botfiles = self.packages.${prev.stdenv.hostPlatform.system}.botfiles;
-                jev-cli = self.packages.${prev.stdenv.hostPlatform.system}.jev-cli;
-                durable-pi = self.packages.${prev.stdenv.hostPlatform.system}.durable-pi;
-              })
-            ];
-          }
           ./hosts/sandbox-host
         ];
       };

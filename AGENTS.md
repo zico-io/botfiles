@@ -42,12 +42,12 @@ before saying a capability is missing. See `.botfile/memory/tools/toolbox.md`.
 
 ## Nix layer
 
-`flake.nix` pins the server toolchain and `nixosConfigurations.sandbox-host`.
-T3 Code runs as a persistent user service; Claude Code and Codex are on its
-provider PATH. Deploy with `nixos-rebuild switch --flake .#sandbox-host
---target-host <host>`. Disks use disko; secrets use sops + age with ciphertext
-only; access is over the tailnet. Microsandbox remains an optional host runtime,
-independent of T3 sessions. See `.botfile/memory/tools/nix.md`.
+`flake.nix` pins the toolchain and `nixosConfigurations.sandbox-host`, a k3s
+agent that adds Kata-isolated sandbox capacity to the home cluster yggdrasil.
+Users reach sandboxes as `sandbox` through yggdrasil's gateway, never through
+the host. Deploy with `nixos-rebuild switch --flake .#sandbox-host
+--target-host admin@sandbox-pool-1`. Disks use disko; secrets use sops + age
+with ciphertext only. See `.botfile/memory/tools/nix.md`.
 
 ## Entity discipline
 

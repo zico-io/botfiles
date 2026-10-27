@@ -72,6 +72,6 @@ The retired macOS fleet and its mission history live in [archive/](archive/READM
 ## Operating guides
 
 - [Toolbox](docs/toolbox.md): search and use skills and MCP integrations.
-- [Nix and sandbox-host](docs/nix.md): deploy the remote KVM host and manage T3 Code.
+- [Nix and sandbox-host](docs/nix.md): deploy the k3s sandbox pool node.
 - [Shared skills](docs/skills.md): where Bask skills come from and how to edit them.
 - [Secrets](secrets/README.md): provision encrypted host secrets.

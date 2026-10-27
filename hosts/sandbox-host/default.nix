@@ -1,6 +1,6 @@
 # sandbox-host - NixOS guest on the bare-metal TrueNAS box (Ryzen 9 5900X,
-# 128 GB). Runs microsandbox microVMs for coding agents, reachable only over
-# the tailnet.
+# 128 GB). A pool node of the yggdrasil k3s cluster (k3s.nix): it runs coding
+# agent sandboxes as Kata VMs and hosts no logins of its own.
 #
 # The NAS is a storage appliance, not the execution boundary: agents run
 # arbitrary repository code, so they get a guest kernel of their own and no
@@ -8,8 +8,8 @@
 #
 # Hypervisor settings this config assumes (TrueNAS -> Virtual Machines):
 #   8 cores / 1 vCPU / 1 thread, host CPU passthrough, nested virtualization ON
-#   48 GiB fixed memory (leave "minimum memory" empty; ballooning and microVMs
-#   are a bad pairing), UEFI boot, VirtIO disks and NIC on the LAN bridge.
+#   48 GiB fixed memory (leave "minimum memory" empty; ballooning and nested
+#   VMs are a bad pairing), UEFI boot, VirtIO disks and NIC on the LAN bridge.
 {
   config,
   lib,
@@ -24,7 +24,10 @@ let
   haveSecrets = builtins.pathExists secretsFile;
 in
 {
-  imports = [ ./disko.nix ];
+  imports = [
+    ./disko.nix
+    ./k3s.nix
+  ];
 
   networking.hostName = "sandbox-host";
   networking.useDHCP = lib.mkDefault true;
@@ -41,7 +44,7 @@ in
     "sd_mod"
   ];
 
-  # kvm-amd is the whole point of this host: microsandbox boots real microVMs,
+  # kvm-amd is the whole point of this host: every sandbox is a Kata VM,
   # so the guest needs nested virtualization from the hypervisor.
   boot.kernelModules = [ "kvm-amd" ];
   boot.kernelParams = [
@@ -50,139 +53,38 @@ in
   ];
   hardware.cpu.amd.updateMicrocode = true;
 
-  # Build, test, and language-server workloads run many watchers and mappings
-  # at once; the stock limits are the first thing a monorepo job hits.
-  boot.kernel.sysctl = {
-    "fs.inotify.max_user_watches" = 1048576;
-    "fs.inotify.max_user_instances" = 4096;
-    "fs.file-max" = 2097152;
-    "vm.max_map_count" = 1048576;
-    "kernel.pid_max" = 4194304;
-  };
-
   services.qemuGuest.enable = true;
 
+  # Break-glass only. Pool nodes are interchangeable and never user-facing;
+  # users reach `sandbox`, the gateway, not a host.
   services.tailnetNode = {
     enable = true;
-    hostname = "sandbox-host";
-    tags = [ "tag:sandbox-host" ];
+    hostname = "sandbox-pool-1";
+    tags = [ "tag:sandbox-pool" ];
     authKeyFile = lib.mkIf haveSecrets config.sops.secrets.tailscale-authkey.path;
   };
 
-  services.microsandbox = {
-    enable = true;
-    stateDir = "/var/lib/microsandbox";
-    # 6 of 8 vCPU and 36 of 48 GiB: the remainder is the OS, page cache, and
-    # the burst headroom that keeps the box answerable while jobs are running.
-    cpuQuota = "600%";
-    memoryMax = "36G";
-  };
+  # A bootstrap token (`k3s token create`) only joins agents, so this host
+  # never holds a credential that could join a server.
+  services.k3s.tokenFile = lib.mkIf haveSecrets config.sops.secrets.k3s-token.path;
 
   sops = lib.mkIf haveSecrets {
     defaultSopsFile = secretsFile;
     age.sshKeyPaths = [ "/etc/ssh/ssh_host_ed25519_key" ];
     secrets.tailscale-authkey = { };
-    # Read by the `jev` wrapper of every human login (see home.nix).
-    secrets.typesafe-api-key = {
-      group = "users";
-      mode = "0440";
-    };
+    secrets.k3s-token = { };
   };
 
   users.users.admin = {
     isNormalUser = true;
-    extraGroups = [
-      "wheel"
-      "kvm" # /dev/kvm, without which msb cannot boot a sandbox
-      config.services.microsandbox.group
-    ];
+    extraGroups = [ "wheel" ];
     openssh.authorizedKeys.keys = import ./admin-keys.nix;
-  };
-
-  # The human login. `admin` stays as the break-glass account; day to day work
-  # (and any T3 Code remote environment) runs as this user.
-  users.users.percules = {
-    isNormalUser = true;
-    linger = true;
-    extraGroups = [
-      "wheel"
-      "kvm"
-      config.services.microsandbox.group
-    ];
-    openssh.authorizedKeys.keys = import ./admin-keys.nix;
-  };
-
-  # A second human login. No wheel: sudo here is passwordless root over every
-  # other user's home. kvm and the microsandbox group are what running
-  # sandboxes needs. No SSH keys; Tailscale SSH is the only way in.
-  users.users.kiera = {
-    isNormalUser = true;
-    extraGroups = [
-      "kvm"
-      config.services.microsandbox.group
-    ];
-  };
-
-  home-manager = {
-    # One package set and one profile generation per user: the alternative
-    # pulls a second nixpkgs into the closure and installs into ~/.nix-profile,
-    # which then drifts from what `nixos-rebuild` just deployed.
-    useGlobalPkgs = true;
-    useUserPackages = true;
-    # Commits made from an agent session on this host would otherwise be
-    # authored by `<user>@sandbox-host`.
-    users.percules = {
-      imports = [
-        ./home.nix
-        ../../modules/durable-pi.nix
-      ];
-      systemd.user.startServices = "sd-switch";
-      # Bound to every interface, but the firewall admits only tailscale0 and
-      # the hub admits only these tailnet logins.
-      services.durable-pi = {
-        enable = true;
-        hub = {
-          host = "0.0.0.0";
-          tailnetAllow = [ "nico@bask.health" ];
-        };
-      };
-      systemd.user.services.t3code = {
-        Unit.Description = "T3 Code server";
-        Service = {
-          ExecStart = "${lib.getExe pkgs.t3code} serve --host 0.0.0.0 --port 3773";
-          WorkingDirectory = "%h";
-          Environment = [ "PATH=/etc/profiles/per-user/percules/bin:/run/current-system/sw/bin" ];
-          Restart = "on-failure";
-          RestartSec = 5;
-        };
-        Install.WantedBy = [ "default.target" ];
-      };
-      programs.git.settings.user = {
-        name = "Nico Zamora";
-        email = "dev@zico.xyz";
-      };
-    };
-    users.kiera = {
-      imports = [ ./home.nix ];
-      programs.git.settings.user = {
-        name = "Kiera McCabe";
-        email = "kiera@bask.health";
-      };
-    };
   };
 
   # This host has no password anywhere: no password SSH, no password console
   # login, and tailnet identity is the authentication boundary. Prompting for a
   # password that was never set would only make sudo unusable.
   security.sudo.wheelNeedsPassword = false;
-
-  # T3 Code's remote runtime, and the agent CLIs it launches, are prebuilt
-  # glibc executables: NixOS has no /lib64/ld-linux, so they fail with a
-  # misleading "no such file or directory" without a loader shim.
-  programs.nix-ld.enable = true;
-
-  # Agent plugin hooks commonly execute scripts with a /bin/bash shebang.
-  systemd.tmpfiles.rules = [ "L+ /bin/bash - - - - ${pkgs.bash}/bin/bash" ];
 
   environment.systemPackages = with pkgs; [
     btop
@@ -200,9 +102,6 @@ in
         "flakes"
       ];
       auto-optimise-store = true;
-      # Prebuilt llm-agents.nix packages (claude-code, codex).
-      extra-substituters = [ "https://cache.numtide.com" ];
-      extra-trusted-public-keys = [ "niks3.numtide.com-1:DTx8wZduET09hRmMtKdQDxNNthLQETkc/yaX7M4qK0g=" ];
       trusted-users = [
         "root"
         "admin"

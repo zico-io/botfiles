@@ -3,7 +3,7 @@
 Encrypted with [sops](https://github.com/getsops/sops) + age; only the
 ciphertext is committed. `hosts/sandbox-host/default.nix` wires sops-nix **only
 if `sandbox-host.yaml` exists**, so a fresh checkout evaluates without it and
-the host simply expects a manual `tailscale up`.
+the host simply expects a manual `tailscale up` and has no k3s token.
 
 Decryption on the host uses its SSH host key, converted to an age key by
 sops-nix. So the host must exist before its secrets can be encrypted to it.
@@ -12,7 +12,7 @@ sops-nix. So the host must exist before its secrets can be encrypted to it.
 
 ```bash
 nix develop                                    # sops + age + ssh-to-age
-ssh sandbox-host 'cat /etc/ssh/ssh_host_ed25519_key.pub' | ssh-to-age
+ssh admin@sandbox-pool-1 'cat /etc/ssh/ssh_host_ed25519_key.pub' | ssh-to-age
 ```
 
 Put the resulting `age1...` recipient in `.sops.yaml`, replacing the
@@ -26,16 +26,18 @@ with this shape:
 
 ```yaml
 tailscale-authkey: tskey-auth-...
-typesafe-api-key: ...
+k3s-token: K10...
 ```
 
 Every key the host declares must be present, or activation fails.
-`typesafe-api-key` is the TypeSafe Jev key that the `jev` CLI uses for every
-login.
 
-Use a **tag-owning, reusable** auth key so the node can claim
-`tag:sandbox-host` without an operator's personal identity. Commit the
-resulting ciphertext, then `nixos-rebuild switch --flake .#sandbox-host`.
+- `tailscale-authkey`: a **tag-owning, reusable** auth key, so the node can
+  claim `tag:sandbox-pool` without an operator's personal identity.
+- `k3s-token`: a bootstrap token from `sudo k3s token create --ttl 0
+  --description sandbox-pool` on a yggdrasil server. It joins agents only;
+  never use the server token.
+
+Commit the resulting ciphertext, then `nixos-rebuild switch --flake .#sandbox-host`.
 
 ## Rotating
 
