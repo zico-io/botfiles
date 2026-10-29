@@ -23,8 +23,7 @@ skill from `main` on install, so its next deploy carries the change.
 ## Edit locally
 
 Point the toolbox at your working checkout with
-`BASK_SKILLS_ROOT=/path/to/skills` when running `bash provision.sh` or
-`botfiles-provision`; it is saved in each provider's toolbox server config and
+`BASK_SKILLS_ROOT=/path/to/skills` when running `bash provision.sh`; it is saved in each provider's toolbox server config and
 takes effect on the next search/use call. Re-run provisioning without the
 variable to return to the pulled clone.
 

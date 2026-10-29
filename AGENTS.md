@@ -30,9 +30,7 @@ Every fact ends with inline provenance:
 
 Botfiles configures the remote T3 Code server and its Claude Code and Codex
 providers. The MacBook is a T3 client and does not consume these files.
-Run providers as the human server user. The former herdr/orbal-net macOS fleet
-is retired under `archive/local-fleet/`; do not use its launchers or instructions
-for the T3 server.
+Run providers as the human server user.
 
 ## Toolbox
 
@@ -42,7 +40,7 @@ before saying a capability is missing. See `.botfile/memory/tools/toolbox.md`.
 
 ## Nix layer
 
-`flake.nix` pins the toolchain and packages `botfiles`, `jev-cli` and `t3code`.
+`flake.nix` pins the dev toolchain and the CI gates.
 The sandbox pool node sandbox-host is configured in yggdrasil
 (gitlab percs/yggdrasil, `nixos/`), not here. See `.botfile/memory/tools/nix.md`.
 
