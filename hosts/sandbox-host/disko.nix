@@ -64,7 +64,10 @@
           content = {
             type = "filesystem";
             format = "ext4";
-            mountpoint = "/var/cache/sandbox";
+            # containerd's image store. The kubelet clears images when the
+            # filesystem holding them fills, so on / anything else written there
+            # evicted the CI and sandbox images and every job pulled them again.
+            mountpoint = "/var/lib/rancher/k3s/agent/containerd";
             mountOptions = [ "noatime" ];
           };
         };
