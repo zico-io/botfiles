@@ -21,8 +21,11 @@ nixos-rebuild switch --flake .#sandbox-host \
   --target-host admin@sandbox-pool-1
 ```
 
-Disks are declarative (disko: OS, sandbox homes at `/var/lib/sandboxes`, cache,
-artifacts). Secrets are sops + age, with only ciphertext committed: the tailnet
+Disks are declarative (disko: OS, sandbox homes at `/var/lib/sandboxes`,
+containerd's images at `/var/lib/rancher/k3s/agent/containerd`, artifacts).
+Images get their own disk so nothing written to `/` can make the kubelet clear
+them. Moving a mount under a running k3s needs a reboot: drain the node,
+`nixos-rebuild boot` with the same flags, then reboot. Secrets are sops + age, with only ciphertext committed: the tailnet
 auth key and the k3s bootstrap token. The firewall trusts `tailscale0` and the
 pod interfaces, and admits kubelet and flannel from the three k3s servers only.
 `sandbox-pool-1` on the tailnet is break-glass access for `admin`. When

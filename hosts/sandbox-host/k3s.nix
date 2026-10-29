@@ -45,6 +45,8 @@ in
 
   # containerd resolves `io.containerd.kata.v2` to containerd-shim-kata-v2 on its PATH.
   systemd.services.k3s.path = [ pkgs.kata-runtime ];
+  # Its image store is the cache disk (disko.nix); without it, k3s would pull onto /.
+  systemd.services.k3s.unitConfig.RequiresMountsFor = [ "/var/lib/rancher/k3s/agent/containerd" ];
 
   boot.kernelModules = [ "vhost_vsock" ];
 
