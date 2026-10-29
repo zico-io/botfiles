@@ -9,9 +9,6 @@ pkgs.mkShell {
     jq
     ripgrep
     nixfmt
-    sops
-    age
-    ssh-to-age # secrets/ workflow
   ];
 
   shellHook = ''

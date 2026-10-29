@@ -3,14 +3,6 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
-    disko = {
-      url = "github:nix-community/disko";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-    sops-nix = {
-      url = "github:Mic92/sops-nix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
     # No nixpkgs follows: its own pin is what cache.numtide.com built against,
     # so following ours would turn every agent CLI into a local build.
     llm-agents.url = "github:numtide/llm-agents.nix";
@@ -20,8 +12,6 @@
     {
       self,
       nixpkgs,
-      disko,
-      sops-nix,
       llm-agents,
     }:
     let
@@ -65,24 +55,5 @@
       );
 
       formatter = forAllSystems (pkgs: pkgs.nixfmt);
-
-      nixosModules = {
-        tailnet = import ./modules/tailnet.nix;
-      };
-
-      nixosConfigurations.sandbox-host = nixpkgs.lib.nixosSystem {
-        system = "x86_64-linux";
-        modules = [
-          disko.nixosModules.disko
-          sops-nix.nixosModules.sops
-          self.nixosModules.tailnet
-          ./hosts/sandbox-host
-        ];
-      };
-
-      nixosConfigurations.rescue = nixpkgs.lib.nixosSystem {
-        system = "x86_64-linux";
-        modules = [ ./hosts/rescue ];
-      };
     };
 }
