@@ -17,7 +17,7 @@ nix develop
 ```
 
 The CLIs use only the Python standard library. `nix develop` also supplies the
-Node, GitHub, and secrets tooling used by the rest of the repo.
+Node and GitHub tooling used by the rest of the repo.
 
 ## Harness setup
 
@@ -44,9 +44,8 @@ For local skill development and fleet deployment, see [shared skills](docs/skill
 | [bin/](bin/) | Memory CLI and toolbox |
 | [skills/](skills/) | Reusable workflows |
 | [toolbox/catalog.json](toolbox/catalog.json) | Skill roots, plugins, and MCP integrations |
-| [flake.nix](flake.nix) | Pinned dev toolchain, checks, packages, and NixOS host |
-| [hosts/](hosts/), [modules/](modules/), [pkgs/](pkgs/) | NixOS host configuration and sandbox runtime |
-| [secrets/](secrets/) | Sops configuration and secret provisioning instructions |
+| [flake.nix](flake.nix) | Pinned dev toolchain, checks, and packages |
+| [pkgs/](pkgs/) | Nix packages for the T3 server |
 
 ## Memory and validation
 
@@ -64,7 +63,7 @@ Use one file per domain topic or tool. Keep entities in
 `validate` checks entity fields and unique IDs, memory index completeness, and
 fact provenance. `budget-check` enforces the root instruction line budget.
 `selfcheck` exercises the provenance parser; the toolbox has its own selfcheck.
-CI runs these gates and evaluates the Nix flake and sandbox host. Run
+CI runs these gates and evaluates the Nix flake. Run
 `nix flake check` for the flake checks.
 
 The retired macOS fleet and its mission history live in [archive/](archive/README.md).
@@ -72,6 +71,5 @@ The retired macOS fleet and its mission history live in [archive/](archive/READM
 ## Operating guides
 
 - [Toolbox](docs/toolbox.md): search and use skills and MCP integrations.
-- [Nix and sandbox-host](docs/nix.md): deploy the k3s sandbox pool node.
+- [Nix](docs/nix.md): the dev shell, flake checks, and server packages.
 - [Shared skills](docs/skills.md): where Bask skills come from and how to edit them.
-- [Secrets](secrets/README.md): provision encrypted host secrets.
