@@ -29,10 +29,8 @@ Link the shared instructions into your installed harnesses:
 
 This symlinks `AGENTS.md` into `~/.claude/` and `~/.codex/`.
 Run `bash provision.sh` on the server to register the toolbox in both providers.
-The MacBook is a T3 client and does not install or consume botfiles.
+The MacBook only registers the toolbox from a checkout, with the same command.
 
-Nix deploys the `botfiles` package and shared instructions to both server logins.
-Run `botfiles-provision` once as each user to register the packaged toolbox.
 For local skill development and fleet deployment, see [shared skills](docs/skills.md).
 
 ## Repository layout
@@ -44,8 +42,7 @@ For local skill development and fleet deployment, see [shared skills](docs/skill
 | [bin/](bin/) | Memory CLI and toolbox |
 | [skills/](skills/) | Reusable workflows |
 | [toolbox/catalog.json](toolbox/catalog.json) | Skill roots, plugins, and MCP integrations |
-| [flake.nix](flake.nix) | Pinned dev toolchain, checks, and packages |
-| [pkgs/](pkgs/) | Nix packages for the T3 server |
+| [flake.nix](flake.nix) | Pinned dev toolchain and checks |
 
 ## Memory and validation
 
@@ -66,10 +63,8 @@ fact provenance. `budget-check` enforces the root instruction line budget.
 CI runs these gates and evaluates the Nix flake. Run
 `nix flake check` for the flake checks.
 
-The retired macOS fleet and its mission history live in [archive/](archive/README.md).
-
 ## Operating guides
 
 - [Toolbox](docs/toolbox.md): search and use skills and MCP integrations.
-- [Nix](docs/nix.md): the dev shell, flake checks, and server packages.
+- [Nix](docs/nix.md): the dev shell and flake checks.
 - [Shared skills](docs/skills.md): where Bask skills come from and how to edit them.

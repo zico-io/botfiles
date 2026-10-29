@@ -1,18 +1,14 @@
 {
-  description = "botfiles - shared tooling and instructions for the remote T3 Code server";
+  description = "botfiles - shared instructions, memory, and the toolbox";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
-    # No nixpkgs follows: its own pin is what cache.numtide.com built against,
-    # so following ours would turn every agent CLI into a local build.
-    llm-agents.url = "github:numtide/llm-agents.nix";
   };
 
   outputs =
     {
       self,
       nixpkgs,
-      llm-agents,
     }:
     let
       # Hand-rolled instead of flake-utils: one fewer input for one genAttrs.
@@ -24,24 +20,6 @@
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in
     {
-      packages = forAllSystems (
-        pkgs:
-        let
-          botfiles = pkgs.callPackage ./pkgs/botfiles.nix { src = self; };
-        in
-        {
-          inherit botfiles;
-          default = botfiles;
-          jev-cli = pkgs.callPackage ./pkgs/jev-cli.nix { };
-          t3code = llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.t3code.override {
-            providerPackages = with llm-agents.packages.${pkgs.stdenv.hostPlatform.system}; [
-              claude-code
-              codex
-            ];
-          };
-        }
-      );
-
       devShells = forAllSystems (pkgs: {
         default = import ./nix/shell.nix { inherit pkgs; };
       });
