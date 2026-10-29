@@ -31,6 +31,10 @@ in
     nodeIP = "192.168.12.243";
     nodeLabel = [ "pool=sandbox" ];
     nodeTaint = [ "pool=sandbox:NoSchedule" ];
+    # An image no pod has used for 14 days goes even when the disk has room, so
+    # the image disk holds what the pool and CI use rather than everything they
+    # ever pulled (factory decision 396).
+    extraKubeletConfig.imageMaximumGCAge = "336h";
     containerdConfigTemplate = ''
       {{ template "base" . }}
 
