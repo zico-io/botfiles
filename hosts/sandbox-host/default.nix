@@ -51,6 +51,11 @@ in
     "amd_iommu=on"
     "iommu=pt"
   ];
+  # The qxl DRM driver for TrueNAS's SPICE display wedges under load ("[TTM]
+  # Buffer eviction failed" every 15 s), which froze the console and hung a
+  # shutdown for 15 minutes. Without it the console runs on the UEFI
+  # framebuffer through simpledrm, which SPICE shows the same.
+  boot.blacklistedKernelModules = [ "qxl" ];
   hardware.cpu.amd.updateMicrocode = true;
 
   services.qemuGuest.enable = true;
