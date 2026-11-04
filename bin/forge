@@ -1,0 +1,554 @@
+#!/usr/bin/env python3
+"""forge - run a repo's quality gates, cheapest first, then push.
+
+Subcommands:
+  push [--cwd DIR] [--check] [--base BRANCH] [--skip GATE --reason TEXT]
+  selfcheck   end-to-end run against a fixture repo and a fake devenv
+
+Gate commands are devenv tasks named forge:<gate> in the repo's devenv.nix, so
+forge hardcodes no repo tooling. The task contract is in skills/forge-env/SKILL.md.
+
+Prints one JSON result to stdout. Exit 0 pushed or checked, 1 blocked, 2 error.
+No third-party deps.
+"""
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+from collections import namedtuple
+from pathlib import Path
+
+DEVENV = os.environ.get("FORGE_DEVENV", "devenv")
+CACHE = Path(os.environ.get("FORGE_CACHE", Path.home() / ".cache" / "forge"))
+# Under the toolbox's 900 s use timeout, so forge reports instead of being killed.
+BUDGET_S = float(os.environ.get("FORGE_BUDGET_S", 840))
+MAX_FINDINGS = 20
+AUTOFIX_MESSAGE = "style: forge autofix"
+ENV_FILES = ("devenv.nix", "devenv.lock", "devenv.yaml")
+
+Gate = namedtuple("Gate", "name timeout_s autofix")
+GATES = (
+    Gate("format", 60, True),
+    Gate("lint", 60, True),
+    Gate("typecheck", 300, False),
+    Gate("unit", 300, False),
+    Gate("integration", 300, False),
+)
+# ponytail: no merge-base rerun to classify unit or integration failures as
+# pre-existing. Gate tasks scope themselves by the branch diff, so at the merge
+# base they select nothing and a rerun would "pass" every failure. Doing it
+# right needs per-test IDs from each runner plus a second forge:ready worktree
+# inside the same budget. Until then, a known base-branch failure is skipped
+# explicitly: --skip unit --reason "...".
+
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+# devenv's own progress and summary lines, as opposed to what the task printed.
+FRAMING_RE = re.compile(r"^\s*(?:[✓✖•]\s|×\s+Some tasks failed|\{\}$)")
+
+
+class Stop(Exception):
+    def __init__(self, status, next_step):
+        super().__init__(next_step)
+        self.status, self.next = status, next_step
+
+
+def findings(output):
+    lines = [ANSI_RE.sub("", l).rstrip() for l in output.splitlines()]
+    return [l for l in lines if l.strip() and not FRAMING_RE.match(l)][-MAX_FINDINGS:]
+
+
+def kill_group(proc):
+    """Stop the whole group: devenv forks the task shell, which forks the tool."""
+    for sig, wait in ((signal.SIGTERM, 5), (signal.SIGKILL, None)):
+        try:
+            os.killpg(proc.pid, sig)
+        except ProcessLookupError:
+            pass
+        try:
+            return proc.communicate(timeout=wait)[0] or ""
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def stop_manager(pid):
+    """SIGTERM the detached devenv process manager, which stops its services.
+    devenv 2.1.2 `tasks run` deletes the running manager's pid file and socket,
+    so after the first gate `devenv processes down` can no longer reach it.
+    """
+    if pid is None:
+        return False
+    cmd = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True)
+    if "daemon-processes" not in cmd.stdout:
+        return False
+    os.kill(pid, signal.SIGTERM)
+    for _ in range(100):
+        time.sleep(0.1)
+        if subprocess.run(["ps", "-p", str(pid)], capture_output=True).returncode != 0:
+            return True
+    os.kill(pid, signal.SIGKILL)
+    return True
+
+
+class Run:
+    def __init__(self, cwd, check, skips):
+        self.cwd, self.check, self.skips = cwd, check, skips
+        self.deadline = time.monotonic() + BUDGET_S
+        self.started_processes = False
+        self.manager_pid = None
+        self.result = {"status": None, "gates": {}, "log_dir": None, "next": None}
+
+    def remaining(self):
+        return self.deadline - time.monotonic()
+
+    def run(self, cmd, log, timeout, env=None):
+        """(exit code or None on timeout, combined output); appends to `log`."""
+        proc = subprocess.Popen(
+            cmd, cwd=self.cwd, env=env, text=True, start_new_session=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        )
+        try:
+            out, _ = proc.communicate(timeout=max(timeout, 0.1))
+            rc = proc.returncode
+        except subprocess.TimeoutExpired:
+            out, rc = kill_group(proc), None
+        except BaseException:
+            kill_group(proc)
+            raise
+        with open(self.log_dir / f"{log}.log", "a") as f:
+            f.write(f"$ {' '.join(cmd)}\n{out}\n[exit {rc}]\n")
+        return rc, out
+
+    def git(self, *args, ok=(0,)):
+        r = subprocess.run(["git", *args], cwd=self.cwd, capture_output=True, text=True)
+        if r.returncode not in ok:
+            raise Stop("error", f"`git {' '.join(args)}` failed: {r.stderr.strip()}")
+        return r.stdout.strip()
+
+    def devenv(self, *args):
+        return [DEVENV, "--no-tui", *args]
+
+    def gate(self, name, cmd, timeout, env=None):
+        t0 = time.monotonic()
+        rc, out = self.run(cmd, name, min(timeout, self.remaining()), env)
+        entry = {
+            "status": "passed" if rc == 0 else "timeout" if rc is None else "failed",
+            "duration_s": round(time.monotonic() - t0, 1),
+            "findings": findings(out) if rc != 0 else [],
+        }
+        if rc is None:
+            entry["findings"].append(f"timed out after {entry['duration_s']} s")
+        self.result["gates"][name] = entry
+        return entry["status"] == "passed"
+
+    def blocked_at(self, name):
+        status = self.result["gates"][name]["status"]
+        log = self.log_dir / f"{name}.log"
+        if status == "timeout":
+            return Stop("blocked", f"{name} timed out (per-gate limit or the {BUDGET_S:g} s total); "
+                                   f"scope it to $FORGE_CHANGED_FILES or speed it up (full log: {log}), "
+                                   "then rerun `forge push`")
+        return Stop("blocked", f"{name} failed; fix it (full log: {log}), commit, and rerun `forge push`")
+
+    def push(self, base, skip_reason):
+        top = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=self.cwd,
+                             capture_output=True, text=True)
+        if top.returncode != 0:
+            raise Stop("error", f"{self.cwd} is not a git repository")
+        self.cwd = Path(top.stdout.strip())
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        self.log_dir = CACHE / "logs" / self.cwd.name / f"{stamp}-{os.getpid()}"
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.result["log_dir"] = str(self.log_dir)
+
+        if self.git("status", "--porcelain"):
+            raise Stop("blocked", "working tree is dirty; commit your changes (forge tests "
+                                  "and pushes commits, not the working tree), then rerun `forge push`")
+        branch = self.git("symbolic-ref", "--short", "-q", "HEAD", ok=(0, 1))
+        if not branch:
+            raise Stop("blocked", "HEAD is detached; check out a branch, then rerun `forge push`")
+        if not (self.cwd / "devenv.nix").is_file():
+            raise Stop("blocked", "no devenv.nix; run the forge-env skill to write one, "
+                                  "commit it, then rerun `forge push`")
+        if not shutil.which(DEVENV):
+            raise Stop("error", f"`{DEVENV}` is not on PATH; install devenv (https://devenv.sh)")
+
+        base = (base or self.configured_base() or self.default_branch()).removeprefix("origin/")
+        rc, out = self.run(["git", "fetch", "origin", base], "preflight", self.remaining())
+        if rc != 0:
+            raise Stop("error", f"`git fetch origin {base}` failed: {out.strip()[-300:]}")
+        merge_base = self.git("merge-base", "HEAD", "FETCH_HEAD")
+        changed = self.git("diff", "--name-only", "--diff-filter=ACMR", merge_base, "HEAD")
+        changed_file = self.log_dir / "changed-files"
+        changed_file.write_text(changed + "\n" if changed else "")
+        self.result.update(branch=branch, base=base, merge_base=merge_base)
+
+        if self.cache_path(merge_base).exists():
+            self.result["cache"] = "hit"
+        else:
+            self.result["cache"] = "miss"
+            self.run_gates(base, merge_base, changed_file, skip_reason)
+            if not self.skips:
+                self.cache_path(merge_base).parent.mkdir(parents=True, exist_ok=True)
+                self.cache_path(merge_base).write_text(self.log_dir.name + "\n")
+
+        if self.check:
+            self.result["status"] = "checked"
+            self.result["next"] = "gates passed; run `forge push` without --check to push"
+            return
+        has_upstream = self.git("rev-parse", "--abbrev-ref", "@{u}", ok=(0, 128)) != ""
+        cmd = ["git", "push", *([] if has_upstream else ["-u"]), "origin", branch]
+        rc, out = self.run(cmd, "push", max(self.remaining(), 30))
+        if rc != 0:
+            self.result["push"] = findings(out)
+            raise Stop("blocked", f"push was rejected; `git pull --rebase origin {branch}`, "
+                                  "then rerun `forge push` (forge never force-pushes)")
+        self.result["status"] = "pushed"
+        self.result["next"] = f"pushed {branch} to origin; open or update its pull request"
+
+    def configured_base(self):
+        try:
+            r = subprocess.run(self.devenv("eval", "env.FORGE_BASE"), cwd=self.cwd,
+                               capture_output=True, text=True, timeout=max(self.remaining(), 1))
+            return json.loads(r.stdout).get("env.FORGE_BASE") if r.returncode == 0 else None
+        except (subprocess.TimeoutExpired, json.JSONDecodeError):
+            return None
+
+    def default_branch(self):
+        ref = self.git("symbolic-ref", "-q", "refs/remotes/origin/HEAD", ok=(0, 1))
+        return ref.rsplit("/", 1)[-1] if ref else "main"
+
+    def cache_path(self, merge_base):
+        h = hashlib.sha256()
+        for part in (self.git("rev-parse", "HEAD^{tree}"), merge_base, ",".join(sorted(self.skips))):
+            h.update(part.encode() + b"\0")
+        for f in [*(self.cwd / n for n in ENV_FILES), Path(__file__).resolve()]:
+            h.update(f.read_bytes() if f.is_file() else b"-")
+            h.update(b"\0")
+        return CACHE / "pass" / h.hexdigest()
+
+    def run_gates(self, base, merge_base, changed_file, skip_reason):
+        t0 = time.monotonic()
+
+        def record(rc, out):
+            self.result["gates"]["preflight"] = {
+                "status": "passed" if rc == 0 else "timeout" if rc is None else "failed",
+                "duration_s": round(time.monotonic() - t0, 1),
+                "findings": findings(out) if rc != 0 else [],
+            }
+            if rc != 0:
+                raise self.blocked_at("preflight")
+
+        def step(*args):
+            rc, out = self.run(self.devenv(*args), "preflight", self.remaining())
+            if rc != 0:
+                record(rc, out)
+
+        # Services first: forge:migrate and forge:seed need the database up.
+        if self.run(self.devenv("processes", "list"), "preflight", 30)[0] != 0:
+            rc, out = self.run(self.devenv("up", "-d"), "preflight", self.remaining())
+            if rc == 0 or "No processes defined" not in out:
+                # Set even when `up` fails: it may have started some processes.
+                self.started_processes = True
+                if rc != 0:
+                    record(rc, out)
+                step("processes", "wait")
+                pid_file = self.cwd / ".devenv" / "run" / "processes" / "native-manager.pid"
+                if pid_file.is_file():
+                    self.manager_pid = int(pid_file.read_text().split()[0])
+        step("tasks", "run", "forge:ready")
+        record(0, "")
+
+        env = {**os.environ, "FORGE_BASE": base, "FORGE_MERGE_BASE": merge_base,
+               "FORGE_CHANGED_FILES": str(changed_file)}
+        for gate in GATES:
+            if gate.name in self.skips:
+                self.result["gates"][gate.name] = {"status": "skipped", "reason": skip_reason}
+                continue
+            cmd = self.devenv("tasks", "run", "--mode", "single", "--show-output", f"forge:{gate.name}")
+            passed = self.gate(gate.name, cmd, gate.timeout_s, env)
+            if gate.autofix and (not passed or gate.name == "lint"):
+                self.commit_autofix(timed_out=self.result["gates"][gate.name]["status"] == "timeout")
+            if not passed:
+                raise self.blocked_at(gate.name)
+
+    def commit_autofix(self, timed_out):
+        files = self.git("diff", "--name-only")
+        if not files:
+            return
+        if timed_out:
+            raise Stop("blocked", "an autofix gate timed out and left uncommitted edits; "
+                                  "review them with `git diff`, commit or discard, then rerun `forge push`")
+        self.git("add", "-u")
+        self.git("commit", "-q", "-m", AUTOFIX_MESSAGE)
+        self.result["autofix_commit"] = {
+            "sha": self.git("rev-parse", "HEAD"),
+            "files": files.splitlines(),
+            "note": f"forge added a `{AUTOFIX_MESSAGE}` commit to local history",
+        }
+
+    def teardown(self):
+        if not self.started_processes:
+            return
+        self.started_processes = False
+        rc, _ = self.run(self.devenv("processes", "down"), "teardown", 60)
+        if rc == 0:
+            self.result["teardown"] = "stopped"
+        elif stop_manager(self.manager_pid):
+            self.result["teardown"] = f"stopped (signalled devenv manager {self.manager_pid})"
+        else:
+            self.result["teardown"] = "failed; services may still be running, see teardown.log"
+
+
+def push(args):
+    if args.skip and not args.reason:
+        print(json.dumps({"status": "error", "next": "--skip needs --reason"}))
+        return 2
+    unknown = set(args.skip) - {g.name for g in GATES}
+    if unknown:
+        print(json.dumps({"status": "error", "next": f"unknown gate(s): {', '.join(sorted(unknown))}"}))
+        return 2
+
+    def interrupted(signum, _frame):
+        raise Stop("error", f"forge was interrupted by signal {signum}; rerun `forge push`")
+
+    # devenv's AI-agent auto-quiet (CLAUDECODE, AI_AGENT) drops task stdout even
+    # with --show-output; findings and logs need it.
+    os.environ["DEVENV_NO_AI_AGENT"] = "1"
+    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        signal.signal(sig, interrupted)
+    run = Run(Path(args.cwd).resolve(), args.check, set(args.skip))
+    try:
+        run.push(args.base, args.reason)
+    except Stop as s:
+        run.result["status"], run.result["next"] = s.status, s.next
+    except Exception as e:
+        run.result["status"], run.result["next"] = "error", f"forge crashed: {e!r}; see {run.result['log_dir']}"
+    finally:
+        for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+            signal.signal(sig, signal.SIG_IGN)
+        run.teardown()
+    if run.result.get("autofix_commit") and run.result["status"] != "pushed":
+        run.result["next"] += f"; note: {run.result['autofix_commit']['note']}"
+    print(json.dumps(run.result, indent=2))
+    return {"pushed": 0, "checked": 0, "blocked": 1}.get(run.result["status"], 2)
+
+
+# --- selfcheck -------------------------------------------------------------
+
+SHIM = r'''#!/usr/bin/env python3
+# Fake devenv. Tasks are shell scripts in .shim/. `up -d` starts a sleeper whose
+# pid file stands in for the native manager; SHIM_ORPHAN=1 makes `tasks run`
+# delete that pid file, as devenv 2.1.2 does.
+import os, signal, subprocess, sys
+state = os.environ["SHIM_STATE"]
+args = [a for a in sys.argv[1:] if a not in ("--no-tui", "-v", "--show-output")]
+if "--mode" in args:
+    i = args.index("--mode"); del args[i:i + 2]
+pid_file = ".devenv/run/processes/native-manager.pid"
+def log(event):
+    with open(os.path.join(state, "events"), "a") as f:
+        f.write(event + "\n")
+if args[0] == "eval":
+    sys.exit(1)
+if args[:2] == ["tasks", "run"]:
+    script = os.path.join(".shim", args[2])
+    if not os.path.exists(script):
+        print("  × Task does not exist: " + args[2], file=sys.stderr); sys.exit(1)
+    log(args[2])
+    if os.environ.get("SHIM_ORPHAN") and os.path.exists(pid_file):
+        os.remove(pid_file)
+    rc = subprocess.run(["sh", script]).returncode
+    print("✖ Running tasks (failed)" if rc else "{}")
+    sys.exit(rc)
+if args == ["processes", "list"]:
+    sys.exit(0 if os.path.exists(pid_file) else 1)
+if args == ["up", "-d"]:
+    if os.path.exists(".shim/no-processes"):
+        print("  × No processes defined", file=sys.stderr); sys.exit(1)
+    daemon = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)", "daemon-processes"],
+                              start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    os.makedirs(os.path.dirname(pid_file), exist_ok=True)
+    for path in (pid_file, os.path.join(state, "daemon")):
+        with open(path, "w") as f:
+            f.write(str(daemon.pid))
+    log("up"); sys.exit(0)
+if args == ["processes", "wait"]:
+    sys.exit(0)
+if args == ["processes", "down"]:
+    if not os.path.exists(pid_file):
+        print("  × No process manager is running", file=sys.stderr); sys.exit(1)
+    os.kill(int(open(pid_file).read()), signal.SIGTERM); os.remove(pid_file); log("down"); sys.exit(0)
+sys.exit("shim: unhandled " + " ".join(args))
+'''
+
+TASKS = {
+    "forge:ready": "echo ready",
+    "forge:format": "grep -q messy a.txt && echo clean > a.txt; true",
+    "forge:lint": '[ -f BROKEN ] && { echo "a.txt:1 no-broken (unfixable)"; exit 1; }; true',
+    "forge:typecheck": "true",
+    "forge:unit": 'cp "$FORGE_CHANGED_FILES" "$SHIM_STATE/changed"; echo "$FORGE_MERGE_BASE" > "$SHIM_STATE/mb"',
+    "forge:integration": "[ -f SLOW ] && sleep 30; true",
+}
+
+
+def selfcheck():
+    tmp = Path(tempfile.mkdtemp(prefix="forge-selfcheck-"))
+    state, shim_bin = tmp / "state", tmp / "bin"
+    state.mkdir()
+    shim_bin.mkdir()
+    (shim_bin / "devenv").write_text(SHIM)
+    (shim_bin / "devenv").chmod(0o755)
+    env = {
+        **os.environ, "HOME": str(tmp), "PATH": f"{shim_bin}{os.pathsep}{os.environ['PATH']}",
+        "SHIM_STATE": str(state), "FORGE_CACHE": str(tmp / "cache"), "FORGE_DEVENV": "devenv",
+        "GIT_AUTHOR_NAME": "forge", "GIT_AUTHOR_EMAIL": "forge@example.invalid",
+        "GIT_COMMITTER_NAME": "forge", "GIT_COMMITTER_EMAIL": "forge@example.invalid",
+        "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+    }
+    env.pop("FORGE_BUDGET_S", None)
+    remote, work = tmp / "remote.git", tmp / "work"
+
+    def sh(*cmd, cwd=work):
+        return subprocess.run(cmd, cwd=cwd, env=env, check=True, capture_output=True,
+                              text=True).stdout.strip()
+
+    def commit(path, text, msg):
+        (work / path).parent.mkdir(parents=True, exist_ok=True)
+        (work / path).write_text(text)
+        sh("git", "add", "-A")
+        sh("git", "commit", "-q", "-m", msg)
+
+    def forge(*args, **extra):
+        r = subprocess.run([sys.executable, __file__, "push", "--cwd", str(work), *args],
+                           env={**env, **extra}, capture_output=True, text=True)
+        return r.returncode, json.loads(r.stdout)
+
+    def daemon_alive():
+        try:
+            os.kill(int((state / "daemon").read_text()), 0)
+            return True
+        except ProcessLookupError:
+            return False
+
+    def events():
+        f = state / "events"
+        out = f.read_text().split() if f.exists() else []
+        f.unlink(missing_ok=True)
+        return out
+
+    sh("git", "init", "-q", "--bare", "-b", "main", str(remote), cwd=tmp)
+    sh("git", "clone", "-q", str(remote), str(work), cwd=tmp)
+    sh("git", "checkout", "-q", "-b", "main")
+    commit("a.txt", "fine\n", "init")
+    sh("git", "push", "-q", "origin", "main")
+    sh("git", "checkout", "-q", "-b", "feat")
+
+    rc, r = forge()
+    assert (rc, r["status"]) == (1, "blocked") and "forge-env" in r["next"], f"no devenv.nix: {r}"
+
+    for name, body in TASKS.items():
+        commit(f".shim/{name}", body + "\n", f"task {name}")
+    commit(".gitignore", ".devenv/\n", "ignore devenv state")
+    commit("devenv.nix", "{ }\n", "devenv")
+    (work / "scratch").write_text("x")
+    rc, r = forge()
+    assert (rc, r["status"]) == (1, "blocked") and "dirty" in r["next"], f"dirty tree: {r}"
+    (work / "scratch").unlink()
+
+    commit("a.txt", "messy\n", "feature")
+    rc, r = forge()
+    assert (rc, r["status"]) == (0, "pushed"), f"happy path: {r}"
+    assert sh("git", "log", "-1", "--format=%s%n%b") == AUTOFIX_MESSAGE, "autofix commit missing or has a trailer"
+    assert (work / "a.txt").read_text() == "clean\n", "autofix not applied"
+    assert r["autofix_commit"]["files"] == ["a.txt"], f"autofix files: {r}"
+    assert sh("git", "rev-parse", "origin/feat") == sh("git", "rev-parse", "HEAD"), "not pushed"
+    assert sh("git", "rev-parse", "--abbrev-ref", "@{u}") == "origin/feat", "upstream not set"
+    assert (state / "mb").read_text().strip() == sh("git", "rev-parse", "main"), "wrong FORGE_MERGE_BASE"
+    assert ".shim/forge:unit" in (state / "changed").read_text().splitlines(), "changed files missing"
+    assert "devenv.nix" in (state / "changed").read_text().splitlines(), "changed files missing"
+    ev = events()
+    assert ev[0] == "up" and ev[-1] == "down", f"processes not torn down: {ev}"
+    assert ev[1:-1] == ["forge:ready", *(f"forge:{g.name}" for g in GATES)], f"gate order: {ev}"
+    assert not daemon_alive(), "services left running"
+
+    rc, r = forge()
+    assert (rc, r["status"], r["cache"]) == (0, "pushed", "hit") and not events(), f"cache hit: {r}"
+
+    commit("c.txt", "orphan\n", "orphan")
+    rc, r = forge(SHIM_ORPHAN="1")
+    assert rc == 0 and r["teardown"].startswith("stopped (signalled"), f"orphaned manager: {r}"
+    assert not daemon_alive(), "orphaned manager left running"
+    events()
+
+    commit("b.txt", "more\n", "more")
+    rc, r = forge("--check")
+    assert (rc, r["status"]) == (0, "checked"), f"--check: {r}"
+    assert sh("git", "rev-parse", "origin/feat") != sh("git", "rev-parse", "HEAD"), "--check pushed"
+    events()
+
+    commit("BROKEN", "x\n", "break lint")
+    rc, r = forge()
+    assert (rc, r["status"]) == (1, "blocked"), f"failing gate: {r}"
+    assert r["gates"]["lint"]["findings"] == ["a.txt:1 no-broken (unfixable)"], f"findings: {r}"
+    assert "typecheck" not in r["gates"] and "lint" in r["next"], f"did not stop at lint: {r}"
+    assert events()[-1] == "down", "not torn down after a blocked gate"
+
+    rc, r = forge("--skip", "lint")
+    assert rc == 2, f"--skip without --reason: {r}"
+    rc, r = forge("--skip", "lint", "--reason", "known lint debt")
+    assert (rc, r["status"], r["gates"]["lint"]["status"]) == (0, "pushed", "skipped"), f"skip: {r}"
+    events()
+    rc, r = forge("--skip", "lint", "--reason", "known lint debt", "--check")
+    assert r["cache"] == "miss", f"a skipped run was cached: {r}"
+    events()
+
+    sh("git", "rm", "-q", "BROKEN")
+    commit("SLOW", "x\n", "slow integration")
+    proc = subprocess.Popen([sys.executable, __file__, "push", "--cwd", str(work)], env=env,
+                            stdout=subprocess.PIPE, text=True)
+    for _ in range(300):
+        if "forge:integration" in ((state / "events").exists() and (state / "events").read_text() or ""):
+            break
+        time.sleep(0.1)
+    proc.send_signal(signal.SIGTERM)
+    r = json.loads(proc.communicate(timeout=30)[0])
+    assert (proc.returncode, r["status"], r["teardown"]) == (2, "error", "stopped"), f"SIGTERM: {r}"
+    assert not daemon_alive(), "services left running after SIGTERM"
+    events()
+
+    sh("devenv", "up", "-d")
+    events()
+    rc, r = forge(FORGE_BUDGET_S="4")
+    assert (rc, r["gates"]["integration"]["status"]) == (1, "timeout"), f"timeout: {r}"
+    assert "down" not in events() and daemon_alive(), "stopped processes it did not start"
+    sh("devenv", "processes", "down")
+
+    shutil.rmtree(tmp)
+    assert findings("\x1b[31m×\x1b[0m Some tasks failed\n✖ Running x\nreal\n{}\n") == ["real"], "framing kept"
+    print("forge selfcheck: ok")
+    return 0
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(prog="forge", description=__doc__.split("\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("push", help="run the gates, then push")
+    p.add_argument("--cwd", default=".")
+    p.add_argument("--check", action="store_true", help="run the gates but do not push")
+    p.add_argument("--base", help="base branch (default: env.FORGE_BASE in devenv.nix, then origin/HEAD)")
+    p.add_argument("--skip", action="append", default=[], metavar="GATE")
+    p.add_argument("--reason", help="why the skipped gates are skipped (required with --skip)")
+    sub.add_parser("selfcheck")
+    a = ap.parse_args(argv)
+    return selfcheck() if a.cmd == "selfcheck" else push(a)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
