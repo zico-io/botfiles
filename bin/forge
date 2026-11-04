@@ -412,7 +412,7 @@ def selfcheck():
     state, shim_bin = tmp / "state", tmp / "bin"
     state.mkdir()
     shim_bin.mkdir()
-    (shim_bin / "devenv").write_text(SHIM)
+    (shim_bin / "devenv").write_text(SHIM.replace("/usr/bin/env python3", sys.executable, 1))
     (shim_bin / "devenv").chmod(0o755)
     env = {
         **os.environ, "HOME": str(tmp), "PATH": f"{shim_bin}{os.pathsep}{os.environ['PATH']}",
