@@ -51,6 +51,8 @@ GATES = (
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 # devenv's own progress and summary lines, as opposed to what the task printed.
 FRAMING_RE = re.compile(r"^\s*(?:[✓✖•]\s|×\s+Some tasks failed|\{\}$)")
+# ponytail: keyword heuristic for vitest, tsc and eslint output; falls back to the log tail.
+ERROR_RE = re.compile(r"\b(?:FAIL|error)\b|Error\b|^\s*[×✗]\s")
 
 
 class Stop(Exception):
@@ -61,7 +63,8 @@ class Stop(Exception):
 
 def findings(output):
     lines = [ANSI_RE.sub("", l).rstrip() for l in output.splitlines()]
-    return [l for l in lines if l.strip() and not FRAMING_RE.match(l)][-MAX_FINDINGS:]
+    lines = [l for l in lines if l.strip() and not FRAMING_RE.match(l)]
+    return [l for l in lines if ERROR_RE.search(l)][:MAX_FINDINGS] or lines[-MAX_FINDINGS:]
 
 
 def kill_group(proc):
@@ -532,6 +535,8 @@ def selfcheck():
 
     shutil.rmtree(tmp)
     assert findings("\x1b[31m×\x1b[0m Some tasks failed\n✖ Running x\nreal\n{}\n") == ["real"], "framing kept"
+    vitest = " ✓ ok 1ms\n × a > b 3ms\n FAIL  t.test.ts > a > b\nAssertionError: x\n" + "summary\n" * 30
+    assert findings(vitest) == [" × a > b 3ms", " FAIL  t.test.ts > a > b", "AssertionError: x"], "errors not preferred"
     print("forge selfcheck: ok")
     return 0
 
