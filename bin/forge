@@ -255,16 +255,18 @@ class Run:
 
         # Services first: forge:migrate and forge:seed need the database up.
         if self.run(self.devenv("processes", "list"), "preflight", 30)[0] != 0:
-            rc, out = self.run(self.devenv("up", "-d"), "preflight", self.remaining())
+            # Only `up` probes for a free port; tasks and shells always resolve the
+            # base port, so a fallback port would point the gates at someone else's service.
+            rc, out = self.run(self.devenv("up", "-d", "--strict-ports"), "preflight", self.remaining())
             if rc == 0 or "No processes defined" not in out:
                 # Set even when `up` fails: it may have started some processes.
                 self.started_processes = True
-                if rc != 0:
-                    record(rc, out)
-                step("processes", "wait")
                 pid_file = self.cwd / ".devenv" / "run" / "processes" / "native-manager.pid"
                 if pid_file.is_file():
                     self.manager_pid = int(pid_file.read_text().split()[0])
+                if rc != 0:
+                    record(rc, out)
+                step("processes", "wait")
         step("tasks", "run", "forge:ready")
         record(0, "")
 
@@ -300,9 +302,11 @@ class Run:
         if not self.started_processes:
             return
         self.started_processes = False
-        rc, _ = self.run(self.devenv("processes", "down"), "teardown", 60)
+        rc, out = self.run(self.devenv("processes", "down"), "teardown", 60)
         if rc == 0:
             self.result["teardown"] = "stopped"
+        elif self.manager_pid is None and "No process manager is running" in out:
+            self.result["teardown"] = "nothing to stop; `devenv up` never started a manager"
         elif stop_manager(self.manager_pid):
             self.result["teardown"] = f"stopped (signalled devenv manager {self.manager_pid})"
         else:
@@ -372,9 +376,11 @@ if args[:2] == ["tasks", "run"]:
     sys.exit(rc)
 if args == ["processes", "list"]:
     sys.exit(0 if os.path.exists(pid_file) else 1)
-if args == ["up", "-d"]:
+if args == ["up", "-d", "--strict-ports"]:
     if os.path.exists(".shim/no-processes"):
         print("  × No processes defined", file=sys.stderr); sys.exit(1)
+    if os.environ.get("SHIM_PORT_TAKEN"):
+        print("    error: Port 5433 is already in use (PID 1).", file=sys.stderr); sys.exit(1)
     daemon = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)", "daemon-processes"],
                               start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     os.makedirs(os.path.dirname(pid_file), exist_ok=True)
@@ -466,6 +472,10 @@ def selfcheck():
     (work / "scratch").unlink()
 
     commit("a.txt", "messy\n", "feature")
+    rc, r = forge(SHIM_PORT_TAKEN="1")
+    assert (rc, r["status"]) == (1, "blocked") and "already in use" in str(r["gates"]["preflight"]), f"port taken: {r}"
+    assert r["teardown"].startswith("nothing to stop") and not events(), f"port taken teardown: {r}"
+
     rc, r = forge()
     assert (rc, r["status"]) == (0, "pushed"), f"happy path: {r}"
     assert sh("git", "log", "-1", "--format=%s%n%b") == AUTOFIX_MESSAGE, "autofix commit missing or has a trailer"
@@ -526,7 +536,7 @@ def selfcheck():
     assert not daemon_alive(), "services left running after SIGTERM"
     events()
 
-    sh("devenv", "up", "-d")
+    sh("devenv", "up", "-d", "--strict-ports")
     events()
     rc, r = forge(FORGE_BUDGET_S="4")
     assert (rc, r["gates"]["integration"]["status"]) == (1, "timeout"), f"timeout: {r}"

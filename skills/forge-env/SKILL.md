@@ -1,6 +1,6 @@
 ---
 name: forge-env
-description: "Write devenv.nix and devenv.yaml for a pnpm monorepo so `forge push` can run its gates: Node and pnpm toolchain, test services (MySQL, ClickHouse, fakes such as Stripe), per-worktree ports, setup tasks (install, codegen, migrate, seed, ready) and the forge:format, forge:lint, forge:typecheck, forge:unit and forge:integration gate tasks. Use when `forge push` reports no devenv.nix, when a forge gate task is missing or wrong, or when the user asks to set up devenv, a dev environment, or forge for a repo. Not for running the gates (use `forge push`)."
+description: "Write devenv.nix and devenv.yaml for a pnpm monorepo so `forge push` can run its gates: Node and pnpm toolchain, test services (MySQL, ClickHouse, fakes such as Stripe), fixed service ports, setup tasks (install, codegen, migrate, seed, ready) and the forge:format, forge:lint, forge:typecheck, forge:unit and forge:integration gate tasks. Use when `forge push` reports no devenv.nix, when a forge gate task is missing or wrong, or when the user asks to set up devenv, a dev environment, or forge for a repo. Not for running the gates (use `forge push`)."
 license: MIT
 metadata:
   author: botfiles
@@ -21,7 +21,7 @@ Read these before writing anything:
 | --- | --- |
 | `.nvmrc`, `package.json` `engines` and `packageManager` | Node major, pnpm version |
 | `pnpm-workspace.yaml`, `turbo.json` | packages, task names such as `typecheck:go` |
-| `docker-compose*.yml` | services, images, ports, env, init SQL |
+| `compose.yaml`, `docker-compose*.yml` | services, images, ports, env, init SQL |
 | `vitest*.config.*`, `**/globalSetup*`, `.env.test*`, `.env.example` | test databases, fakes, required env vars |
 | `prisma/schema.prisma` (any package) | codegen and migrate commands |
 | `package.json` scripts | the repo's own format, lint, test, seed commands |
@@ -115,9 +115,13 @@ uses, verified against its scripts and configs. Rules that hold for every repo:
   (`devenv search` or https://devenv.sh/services), else to a `processes.<name>`
   with `exec` and a `ready` probe (`ready.exec` or `ready.http.get`). Processes
   must not depend on `forge:*` tasks. forge starts them before `forge:ready`.
-- **Ports per worktree.** Never hardcode a port two worktrees would share. Use
-  `ports.<name>.allocate = <base>` and read `config.processes.<p>.ports.<name>.value`
-  everywhere (env, probes, exec), so a second worktree gets the next free port.
+- **Ports.** Use `ports.<name>.allocate = <base>` and read
+  `config.processes.<p>.ports.<name>.value` everywhere (env, probes, exec).
+  Only `devenv up` moves to a free port; `tasks run` and `shell` always resolve
+  the base, so forge runs `up --strict-ports` and a taken port fails preflight.
+  Pick bases nothing else uses, including the host ports in the repo's own
+  compose file (a dev container on 5433 would otherwise receive the tests).
+  A second worktree at the same time sets other bases in `devenv.local.nix`.
 - **Env.** Non-secret values in `env.*`. Real secrets are declared in
   `secretspec.toml` and enabled in devenv.yaml (`secretspec: { enable: true,
   provider: keyring }`), then read as `config.secretspec.secrets.NAME or ""`
