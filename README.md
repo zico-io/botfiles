@@ -12,6 +12,7 @@ Use Python 3 directly, or enter the pinned toolchain with Nix:
 nix develop
 ./bin/botfile selfcheck
 ./bin/toolbox selfcheck
+./bin/forge selfcheck
 ./bin/botfile validate
 ./bin/botfile budget-check
 ```
@@ -27,7 +28,9 @@ Link the shared instructions into your installed harnesses:
 ./bin/botfile wire --tool all  # codex | claude | all
 ```
 
-This symlinks `AGENTS.md` into `~/.claude/` and `~/.codex/`.
+This symlinks `AGENTS.md` into `~/.claude/` and `~/.codex/` and `bin/forge` into
+`~/.local/bin/`. For Claude it also registers the hook that turns a bare
+`git push` into "use `forge push`".
 Run `bash provision.sh` on the server to register the toolbox in both providers.
 The MacBook only registers the toolbox from a checkout, with the same command.
 
@@ -39,7 +42,8 @@ For local skill development and fleet deployment, see [shared skills](docs/skill
 | --- | --- |
 | [AGENTS.md](AGENTS.md) | Shared agent instructions |
 | [.botfile/](.botfile/) | Manifest, curated memory, and canonical entities |
-| [bin/](bin/) | Memory CLI and toolbox |
+| [bin/](bin/) | Memory CLI, toolbox, and [forge](docs/forge.md) |
+| [hooks/](hooks/) | Claude Code hooks wired by `botfile wire` |
 | [skills/](skills/) | Reusable workflows |
 | [toolbox/catalog.json](toolbox/catalog.json) | Skill roots, plugins, and MCP integrations |
 | [flake.nix](flake.nix) | Pinned dev toolchain and checks |
@@ -59,12 +63,14 @@ Use one file per domain topic or tool. Keep entities in
 
 `validate` checks entity fields and unique IDs, memory index completeness, and
 fact provenance. `budget-check` enforces the root instruction line budget.
-`selfcheck` exercises the provenance parser; the toolbox has its own selfcheck.
+`selfcheck` exercises the provenance parser and hook wiring; the toolbox and
+forge have their own selfchecks.
 CI runs these gates and evaluates the Nix flake. Run
 `nix flake check` for the flake checks.
 
 ## Operating guides
 
 - [Toolbox](docs/toolbox.md): search and use skills and MCP integrations.
+- [forge](docs/forge.md): run a repo's quality gates, then push.
 - [Nix](docs/nix.md): the dev shell and flake checks.
 - [Shared skills](docs/skills.md): where Bask skills come from and how to edit them.

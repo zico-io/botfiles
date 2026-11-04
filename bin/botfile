@@ -4,12 +4,15 @@
 Subcommands:
   validate       check entities.jsonl, memory index completeness, inline provenance
   budget-check   assert root instruction files stay under the line budget
-  wire --tool T  point a harness (codex|claude|all) at this repo's AGENTS.md
+  wire --tool T  point a harness (codex|claude|all) at this repo's AGENTS.md,
+                 link bin/forge into ~/.local/bin, and for claude register the
+                 hook that sends bare `git push` to `forge push`
 
 No third-party deps. The derived vector store / MCP search from the handoff plan
 is deliberately not built: the memory tree is a handful of markdown files and
 grep searches it instantly. Add retrieval when grep actually hurts.
 """
+import importlib.util
 import json
 import os
 import re
@@ -19,6 +22,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 MEM = REPO / ".botfile" / "memory"
 ENTITIES = REPO / ".botfile" / "entities" / "entities.jsonl"
+PUSH_GUARD = REPO / "hooks" / "forge-push-guard.py"
 
 # ponytail: single budget value, so it lives here, not in a yaml parser + dep.
 ROOT_MAX_LINES = 200
@@ -125,32 +129,44 @@ def budget_check():
     return 0
 
 
+def with_push_guard(settings, command):
+    """`settings` with exactly one PreToolUse Bash entry running `command`.
+    Entries for an older checkout's guard are replaced, so rewiring converges.
+    """
+    hooks = settings.setdefault("hooks", {})
+    pre = [
+        entry for entry in hooks.get("PreToolUse", [])
+        if not any(h.get("command", "").endswith(PUSH_GUARD.name) for h in entry.get("hooks", []))
+    ]
+    pre.append({"matcher": "Bash", "hooks": [{"type": "command", "command": command}]})
+    hooks["PreToolUse"] = pre
+    return settings
+
+
 def wire(tool):
-    agents = REPO / "AGENTS.md"
     home = Path.home()
 
-    def link(target):
+    def link(target, source):
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.is_symlink() or target.exists():
             target.unlink()
-        target.symlink_to(agents)
-        print(f"  linked {target} -> {agents}")
+        target.symlink_to(source)
+        print(f"  linked {target} -> {source}")
 
-    def do(t):
-        if t == "codex":
-            link(home / ".codex" / "AGENTS.md")
-        elif t == "claude":
-            link(home / ".claude" / "AGENTS.md")
-        else:
-            print(f"unknown tool: {t}", file=sys.stderr)
-            return 1
-        return 0
+    def register_push_guard():
+        path = home / ".claude" / "settings.json"
+        settings = json.loads(path.read_text()) if path.exists() else {}
+        command = f"python3 {PUSH_GUARD}"
+        path.write_text(json.dumps(with_push_guard(settings, command), indent=2) + "\n")
+        print(f"  registered PreToolUse hook in {path}: {command}")
 
     tools = ["codex", "claude"] if tool == "all" else [tool]
-    rc = 0
     for t in tools:
-        rc |= do(t)
-    return rc
+        link(home / f".{t}" / "AGENTS.md", REPO / "AGENTS.md")
+        if t == "claude":
+            register_push_guard()
+    link(home / ".local" / "bin" / "forge", REPO / "bin" / "forge")
+    return 0
 
 
 def selfcheck():
@@ -163,6 +179,24 @@ def selfcheck():
     assert provenance_gaps(bad) == [1], "missing provenance not caught"
     assert provenance_gaps(bad_date) == [1], "missing date not caught"
     assert provenance_gaps(bad + "\n" + ok) == [1], "wrong bullet flagged in mix"
+
+    other = {"hooks": [{"type": "command", "command": "tuios agent-hook"}]}
+    stale = {"matcher": "Bash", "hooks": [{"type": "command", "command": "python3 /old/hooks/forge-push-guard.py"}]}
+    wired = with_push_guard({"hooks": {"PreToolUse": [other, stale]}, "model": "x"}, "python3 /new/hooks/forge-push-guard.py")
+    assert wired == {"model": "x", "hooks": {"PreToolUse": [
+        other, {"matcher": "Bash", "hooks": [{"type": "command", "command": "python3 /new/hooks/forge-push-guard.py"}]}]}}, wired
+    assert with_push_guard(json.loads(json.dumps(wired)), "python3 /new/hooks/forge-push-guard.py") == wired, "rewire not idempotent"
+
+    spec = importlib.util.spec_from_file_location("push_guard", PUSH_GUARD)
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    denied = ["git push", "git push -u origin feat", "cd x && git push", "make; git  push --force",
+              "(git push)", "ls\ngit push"]
+    allowed = ["forge push", "git -C repo push", "command git push", "git pushy", "echo 'git push'",
+               "git status", "git commit -m 'then git push later'"]
+    assert [c for c in denied if not guard.decide(c)] == [], "bare git push not denied"
+    assert [c for c in allowed if guard.decide(c)] == [], "non-bare push denied"
+    assert guard.decide("git push")["hookSpecificOutput"]["permissionDecisionReason"] == "use `forge push`"
     print("selfcheck ok")
     return 0
 

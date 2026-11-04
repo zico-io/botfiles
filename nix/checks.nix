@@ -7,7 +7,12 @@ let
     tool: name:
     pkgs.runCommand "${tool}-${name}"
       {
-        nativeBuildInputs = [ pkgs.python3 ];
+        nativeBuildInputs = [
+          pkgs.python3
+          # forge selfcheck drives a fixture repo and checks process liveness
+          pkgs.git
+          pkgs.ps
+        ];
       }
       ''
         cp -r ${src} repo
@@ -21,4 +26,5 @@ in
   botfile-validate = gate "botfile" "validate";
   botfile-budget-check = gate "botfile" "budget-check";
   toolbox-selfcheck = gate "toolbox" "selfcheck";
+  forge-selfcheck = gate "forge" "selfcheck";
 }
